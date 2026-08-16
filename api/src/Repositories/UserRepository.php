@@ -14,6 +14,20 @@ use App\Models\User;
 final class UserRepository extends Repository
 {
     /**
+     * Finds a user by primary key (used after insert to load the fresh row).
+     */
+    public function findById(int $id): ?User
+    {
+        $stmt = $this->db->prepare('SELECT * FROM users WHERE id = :id LIMIT 1');
+        $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        $row = $stmt->fetch();
+
+        return $row === false ? null : User::fromRow($row);
+    }
+
+    /**
      * Finds a user by email (used by login + Google OAuth matching).
      */
     public function findByEmail(string $email): ?User
