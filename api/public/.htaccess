@@ -1,0 +1,9 @@
+# Luce Bianca PHP API — Apache rewrite rules
+# Every request to /api/... is routed through public/index.php.
+
+RewriteEngine On
+
+# Do not rewrite existing files or directories (static assets).
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]
