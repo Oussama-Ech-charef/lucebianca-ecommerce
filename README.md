@@ -2,9 +2,6 @@
 
 Premium custom t-shirts. Next.js storefront + PHP (OOP) REST API + MySQL.
 
-> The single master spec lives in [`lucebianca-project-full.md`](./lucebianca-project-full.md).
-> The docs in [`docs/`](./docs/README.md) record decisions made while building.
-
 ## Repo structure
 
 ```
@@ -16,16 +13,15 @@ lucebianca/
 │   ├── config/      # database.example.php (real creds go in .env / config/database.php)
 │   ├── bootstrap.php
 │   └── routes.php   # every route is registered here
-├── database/        # schema.sql — run once to create all 14 tables
-└── docs/            # analysis + decisions (project documentation convention)
+└── database/        # schema.sql — run once to create all 14 tables
 ```
 
-## Stack (from the master spec)
+## Stack
 
 - **Frontend:** Next.js (App Router, server-rendered for SEO), Tailwind CSS, TypeScript
 - **Backend/API:** PHP 8 OOP — **PDO exclusively** (Prepared Statements, one Singleton connection), Composer/PSR-4 autoloading
 - **Database:** MySQL/MariaDB — InnoDB, `utf8mb4` (full Arabic support)
-- **Auth:** JWT (this phase's `App\Core\Auth` issues/verifies HS256 tokens)
+- **Auth:** JWT (`App\Core\Auth` issues/verifies HS256 tokens)
 
 ## Requirements
 
@@ -68,9 +64,3 @@ Only the storefront list/read endpoints are wired in this phase
 (`GET /api/products`, `GET /api/products/{slug}`, `GET /api/categories`,
 `GET /api/health`). Auth-type endpoints and admin CRUD return `501`
 until their roadmap phases land. See [`api/routes.php`](api/routes.php).
-
-## Documentation convention
-
-Any analysis or architecture decision made during development goes under
-[`docs/`](./docs/README.md) — short, dated, one topic per file, committed
-to git. This keeps the project self-explanatory as it grows.
