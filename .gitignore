@@ -1,0 +1,56 @@
+# ============================================================
+# Luce Bianca — .gitignore
+# ============================================================
+
+# --- Secrets / environment variables (the important part) ---
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+config/database.php      # if DB credentials are hardcoded here
+config/secrets.php
+
+# --- Node.js / Next.js ---
+node_modules/
+.next/
+out/
+build/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+
+# --- PHP / Composer ---
+vendor/
+composer.lock
+
+# --- Logs ---
+*.log
+logs/
+storage/logs/
+
+# --- Uploaded files (local, not Cloudinary) ---
+public/uploads/
+uploads/
+docs/
+lucebianca-project-full.md
+
+# --- Database dumps / backups ---
+*.sql.bak
+*.sqlite
+backups/
+
+# --- OS / Editor files ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# --- Testing / coverage ---
+coverage/
+.nyc_output/
+
+# --- Cache ---
+.cache/
+.eslintcache
