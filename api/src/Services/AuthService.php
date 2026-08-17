@@ -131,6 +131,72 @@ final class AuthService
     }
 
     /**
+     * Exchanges a still-valid refresh token for a fresh token pair.
+     *
+     * Rotation: the presented token is revoked here and only the newly
+     * issued pair can be used from now on, so a stolen token works at
+     * most once. The raw token is never compared — only its hash.
+     *
+     * @throws ValidationException         When no refresh token is supplied.
+     * @throws InvalidCredentialsException When the token is unknown, revoked
+     *                                     or expired.
+     *
+     * @return array{token: string, refresh_token: string, user: array} New
+     *         auth payload (same shape as login/register).
+     */
+    public function refresh(string $refreshToken): array
+    {
+        $errors = Validator::validate(
+            ['refresh_token' => $refreshToken],
+            ['refresh_token' => ['required']]
+        );
+        if ($errors !== []) {
+            throw new ValidationException($errors);
+        }
+
+        $hash = $this->hashToken($refreshToken);
+        $row  = $this->refreshTokens->findActive($hash);
+
+        if ($row === null) {
+            throw new InvalidCredentialsException('Invalid or expired refresh token.');
+        }
+
+        // Rotate: the presented token is single-use — revoke it and issue
+        // a fresh access + refresh pair.
+        $this->refreshTokens->revoke($hash);
+
+        try {
+            return $this->issueTokenPair((int) $row['user_id']);
+        } catch (\Throwable $e) {
+            // If the new pair cannot be issued, restore the old token so the
+            // client can retry instead of being locked out.
+            $this->refreshTokens->create((int) $row['user_id'], $hash, $row['expires_at']);
+            throw $e;
+        }
+    }
+
+    /**
+     * Logs a client out by revoking its refresh token.
+     *
+     * Idempotent: revoking an unknown/already-revoked token is a no-op, so
+     * the client always gets a success response and repeat logouts are safe.
+     *
+     * @throws ValidationException When no refresh token is supplied.
+     */
+    public function logout(string $refreshToken): void
+    {
+        $errors = Validator::validate(
+            ['refresh_token' => $refreshToken],
+            ['refresh_token' => ['required']]
+        );
+        if ($errors !== []) {
+            throw new ValidationException($errors);
+        }
+
+        $this->refreshTokens->revoke($this->hashToken($refreshToken));
+    }
+
+    /**
      * Returns issuer time-to-live for logging/debugging.
      */
     public function tokenTtl(): int
@@ -159,7 +225,7 @@ final class AuthService
         $refreshToken = rtrim(strtr(base64_encode(random_bytes(48)), '+/', '-_'), '=');
         $expiresAt    = date('Y-m-d H:i:s', time() + $refreshTtl);
 
-        $this->refreshTokens->create($userId, hash('sha256', $refreshToken), $expiresAt);
+        $this->refreshTokens->create($userId, $this->hashToken($refreshToken), $expiresAt);
 
         /** @var User $user The user was just created/verified, so a row must exist. */
         $user = $this->users->findById($userId);
@@ -169,5 +235,14 @@ final class AuthService
             'refresh_token' => $refreshToken,
             'user'          => $user->toArray(),
         ];
+    }
+
+    /**
+     * Deterministic SHA-256 hex hash of a refresh token — the only form the
+     * raw token is ever persisted in.
+     */
+    private function hashToken(string $refreshToken): string
+    {
+        return hash('sha256', $refreshToken);
     }
 }

@@ -48,4 +48,14 @@ final class Response
     {
         self::error('Route not found', 404);
     }
+
+    /**
+     * 204 No Content — success with an intentionally empty body
+     * (e.g. logout). No JSON is echoed.
+     */
+    public static function noContent(): never
+    {
+        http_response_code(204);
+        exit;
+    }
 }

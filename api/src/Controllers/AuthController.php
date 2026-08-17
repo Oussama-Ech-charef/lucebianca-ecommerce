@@ -73,6 +73,48 @@ final class AuthController extends Controller
     }
 
     /**
+     * POST /api/auth/refresh — exchanges a refresh token for a new pair.
+     *
+     * The presented refresh token is rotated (revoked + replaced), so it can
+     * only be used once; the access JWT returned is a fresh short-lived token.
+     *
+     * @return never 200 with a new auth payload, 422 on missing token,
+     *               401 on unknown/revoked/expired token.
+     */
+    public function refresh(Request $request): never
+    {
+        try {
+            $payload = $this->auth->refresh((string) $request->input('refresh_token', ''));
+        } catch (ValidationException $e) {
+            $this->error($e->getMessage(), 422, ['errors' => $e->errors()]);
+        } catch (InvalidCredentialsException $e) {
+            $this->error($e->getMessage(), 401);
+        }
+
+        $this->json($payload);
+    }
+
+    /**
+     * POST /api/auth/logout — revokes the client's refresh token.
+     *
+     * Idempotent: a missing/unknown token still yields 204, so repeat
+     * logouts never fail. The access JWT stays valid until its own TTL
+     * (short-lived by design).
+     *
+     * @return never 204 on success, 422 on missing token.
+     */
+    public function logout(Request $request): never
+    {
+        try {
+            $this->auth->logout((string) $request->input('refresh_token', ''));
+        } catch (ValidationException $e) {
+            $this->error($e->getMessage(), 422, ['errors' => $e->errors()]);
+        }
+
+        $this->noContent();
+    }
+
+    /**
      * POST /api/auth/google — register/login via Google OAuth 2.0.
      *
      * NOT implemented yet — separate future task.

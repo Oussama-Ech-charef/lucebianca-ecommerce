@@ -39,7 +39,7 @@ final class Validator
             foreach ($fieldRules as $rule) {
                 $name  = is_array($rule) ? (string) $rule[0] : (string) $rule;
                 $param = is_array($rule) ? $rule[1] : null;
-                $label = ucfirst($field);
+                $label = ucfirst(str_replace('_', ' ', $field));
 
                 switch ($name) {
                     case 'required':

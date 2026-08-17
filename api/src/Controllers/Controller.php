@@ -43,4 +43,12 @@ abstract class Controller
     {
         Response::error("$feature is not implemented yet (phase not reached).", 501);
     }
+
+    /**
+     * 204 No Content — success with an intentionally empty body.
+     */
+    protected function noContent(): never
+    {
+        Response::noContent();
+    }
 }

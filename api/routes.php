@@ -46,6 +46,8 @@ $router->get('/api/orders/{id}', [OrderController::class, 'show']);
 // --- Auth ---
 $router->post('/api/auth/register', [AuthController::class, 'register']);
 $router->post('/api/auth/login', [AuthController::class, 'login']);
+$router->post('/api/auth/refresh', [AuthController::class, 'refresh']);
+$router->post('/api/auth/logout', [AuthController::class, 'logout']);
 $router->post('/api/auth/google', [AuthController::class, 'google']);
 
 // --- Contact form (rate limiting added in the security phase) ---
