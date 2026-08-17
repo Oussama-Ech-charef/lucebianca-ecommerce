@@ -91,20 +91,12 @@ export default async function ShopPage({ searchParams }: PageProps<"/shop">) {
 
 function ShopHeading({ resultCount }: { resultCount: string | null }) {
   return (
-    <>
-      <Link
-        href="/"
-        className="font-serif text-xl tracking-[0.15em] text-neutral-900 hover:text-neutral-600"
-      >
-        Luce Bianca
-      </Link>
-      <div className="mt-8">
-        <h1 className="font-serif text-4xl tracking-tight">Shop</h1>
-        {resultCount ? (
-          <p className="mt-2 text-sm text-neutral-500">{resultCount}</p>
-        ) : null}
-      </div>
-    </>
+    <div>
+      <h1 className="font-serif text-4xl tracking-tight">Shop</h1>
+      {resultCount ? (
+        <p className="mt-2 text-sm text-neutral-500">{resultCount}</p>
+      ) : null}
+    </div>
   );
 }
 

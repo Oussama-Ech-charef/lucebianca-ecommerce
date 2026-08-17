@@ -85,15 +85,12 @@ export default async function ProductPage({ params }: PageProps) {
         }}
       />
 
-      <nav className="flex items-center gap-2 text-sm text-neutral-500">
-        <Link href="/" className="hover:text-neutral-900">
-          Luce Bianca
-        </Link>
-        <span aria-hidden="true">/</span>
-        <Link href="/shop" className="hover:text-neutral-900">
-          Shop
-        </Link>
-      </nav>
+      <Link
+        href="/shop"
+        className="text-sm text-neutral-500 transition-colors hover:text-neutral-900"
+      >
+        ← Back to shop
+      </Link>
 
       <div className="mt-6 grid gap-8 lg:grid-cols-2 lg:gap-12">
         <Gallery images={product.images} />
