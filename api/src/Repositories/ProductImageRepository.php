@@ -68,6 +68,31 @@ final class ProductImageRepository extends Repository
     }
 
     /**
+     * Images for many products at once (single query, used by the storefront
+     * listing so each card can show its main image without an N+1).
+     *
+     * @param array<int, int> $productIds
+     *
+     * @return array<int, array<string, mixed>> Raw rows ordered by sort_order.
+     */
+    public function allForProducts(array $productIds): array
+    {
+        if ($productIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($productIds), '?'));
+        $stmt = $this->db->prepare(
+            "SELECT * FROM product_images
+             WHERE product_id IN ({$placeholders})
+             ORDER BY sort_order, id"
+        );
+        $stmt->execute(array_values($productIds));
+
+        return $stmt->fetchAll();
+    }
+
+    /**
      * Clears the is_main flag on all of a product's images, so a newly
      * uploaded image can take over as the single main image.
      */
