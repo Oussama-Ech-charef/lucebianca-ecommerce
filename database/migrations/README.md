@@ -31,3 +31,4 @@ mysql -u root -p < database/migrations/002_add_refresh_tokens_table.sql
 |---|---|---|
 | `001_initial_schema.sql` | Full initial schema (14 tables) | applied |
 | `002_add_refresh_tokens_table.sql` | `refresh_tokens` (SHA-256 hashed, revocable) | applied (phase 2) |
+| `003_add_admin_refresh_tokens_table.sql` | `admin_refresh_tokens` (admins are a fully separate table — see file for the FK decision) | applied (phase 4) |

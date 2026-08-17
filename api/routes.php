@@ -17,6 +17,7 @@ declare(strict_types=1);
 use App\Core\AuthMiddleware;
 use App\Core\Request;
 use App\Core\Router;
+use App\Controllers\Admin\AuthController as AdminAuthController;
 use App\Controllers\Admin\DashboardController;
 use App\Controllers\Admin\OrdersController;
 use App\Controllers\Admin\ProductsController;
@@ -55,6 +56,11 @@ $router->post('/api/contact', [ContactController::class, 'store']);
 
 // --- Admin (JWT + role check on every admin route) ---
 $adminMiddleware = [new AuthMiddleware('admin')];
+
+// Admin login is PUBLIC (no middleware) — the one exception above.
+// There is no public admin registration; admins are seeded offline via
+// api/scripts/create-admin.php.
+$router->post('/api/admin/auth/login', [AdminAuthController::class, 'login']);
 
 $router->get('/api/admin/products', [ProductsController::class, 'index'], $adminMiddleware);
 $router->post('/api/admin/products', [ProductsController::class, 'store'], $adminMiddleware);
