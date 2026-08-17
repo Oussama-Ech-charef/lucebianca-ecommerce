@@ -15,7 +15,8 @@ final class Request
         private string $path,
         private array $query,
         private array $body,
-        private array $headers
+        private array $headers,
+        private array $files = []
     ) {
     }
 
@@ -42,7 +43,8 @@ final class Request
             $path,
             array_merge($_GET, $_POST),
             $body,
-            self::headersFromServer()
+            self::headersFromServer(),
+            $_FILES
         );
     }
 
@@ -122,6 +124,52 @@ final class Request
         }
 
         return $default;
+    }
+
+    /**
+     * Normalized list of uploaded files for a multipart field.
+     *
+     * Accepts both `images[]` (array form: $_FILES['images']['name'][0], ...)
+     * and a single `image` field; every entry gets the same shape:
+     * `{name, type, tmp_name, error, size}`. JSON requests carry no files,
+     * so this never affects the existing input()/all() path.
+     *
+     * @return array<int, array{name: string, type: string, tmp_name: string, error: int, size: int}>
+     */
+    public function files(string $key): array
+    {
+        $entry = $this->files[$key] ?? null;
+        if (!is_array($entry)) {
+            return [];
+        }
+
+        // $_FILES shapes: scalar single upload, or nested arrays for a
+        // multi-upload field (each of name/type/tmp_name/error/size is an array).
+        $isMulti = is_array($entry['name'] ?? null);
+
+        if (!$isMulti) {
+            return [[
+                'name'     => (string) ($entry['name'] ?? ''),
+                'type'     => (string) ($entry['type'] ?? ''),
+                'tmp_name' => (string) ($entry['tmp_name'] ?? ''),
+                'error'    => (int) ($entry['error'] ?? UPLOAD_ERR_NO_FILE),
+                'size'     => (int) ($entry['size'] ?? 0),
+            ]];
+        }
+
+        $files = [];
+        $count = count($entry['name']);
+        for ($i = 0; $i < $count; $i++) {
+            $files[] = [
+                'name'     => (string) ($entry['name'][$i] ?? ''),
+                'type'     => (string) ($entry['type'][$i] ?? ''),
+                'tmp_name' => (string) ($entry['tmp_name'][$i] ?? ''),
+                'error'    => (int) ($entry['error'][$i] ?? UPLOAD_ERR_NO_FILE),
+                'size'     => (int) ($entry['size'][$i] ?? 0),
+            ];
+        }
+
+        return $files;
     }
 
     /**

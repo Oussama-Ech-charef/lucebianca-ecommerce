@@ -33,7 +33,7 @@ final class Variant
             (string) $row['sku'],
             $row['price'] ?? null,
             (int) $row['stock_quantity'],
-            (string) $row['created_at']
+            (string) ($row['created_at'] ?? '') // product_variants has no created_at column
         );
     }
 

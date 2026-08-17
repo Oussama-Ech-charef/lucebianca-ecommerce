@@ -23,4 +23,17 @@ final class CategoryRepository extends Repository
             $stmt->fetchAll()
         );
     }
+
+    /**
+     * Whether a category id exists (used to validate category_id on admin
+     * product create/update before the FK constraint can reject it).
+     */
+    public function exists(int $id): bool
+    {
+        $stmt = $this->db->prepare('SELECT 1 FROM categories WHERE id = :id LIMIT 1');
+        $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchColumn() !== false;
+    }
 }
