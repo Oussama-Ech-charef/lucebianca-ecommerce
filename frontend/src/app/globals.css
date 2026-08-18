@@ -12,6 +12,24 @@
   --font-serif: var(--font-playfair);
 }
 
+/* Chrome/silver accent scale (phase-6 follow-up). Cool-toned blue-grey so it
+   reads as polished metal, not flat neutral grey: near-white highlight on top,
+   a distinct cool mid-tone, near-black shadow at the bottom. Used for hero
+   sheen gradients + accents only — black/white remains the foundation. */
+@theme {
+  --color-chrome-50: #f6f7f8;
+  --color-chrome-100: #edf0f2;
+  --color-chrome-200: #d7dce1;
+  --color-chrome-300: #bac2cb;
+  --color-chrome-400: #9ba6b1;
+  --color-chrome-500: #7c8995;
+  --color-chrome-600: #5d6a76;
+  --color-chrome-700: #46515c;
+  --color-chrome-800: #313a42;
+  --color-chrome-900: #21262c;
+  --color-chrome-950: #111418;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
