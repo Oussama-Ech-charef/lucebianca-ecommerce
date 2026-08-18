@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
 
@@ -22,13 +23,21 @@ export default function Header() {
   return (
     <>
       <header className="sticky top-0 z-40 border-b border-neutral-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6 lg:px-8 md:h-20">
           <Link
             href="/"
             onClick={closeAll}
-            className="font-serif text-xl tracking-[0.15em] text-neutral-900"
+            aria-label="Luce Bianca home"
+            className="flex items-center py-1 pr-3 sm:pr-4"
           >
-            Luce Bianca
+            <Image
+              src="/logo.png"
+              alt="Luce Bianca"
+              width={126}
+              height={84}
+              priority
+              className="h-12 w-auto md:h-14"
+            />
           </Link>
 
           <nav
