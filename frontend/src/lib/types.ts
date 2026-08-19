@@ -69,6 +69,47 @@ export type CategoriesResponse = {
   data: Category[];
 };
 
+/** Order status — mirrors the orders.status ENUM (spec section 4). */
+export type OrderStatus =
+  | "pending"
+  | "processing"
+  | "shipped"
+  | "delivered"
+  | "cancelled";
+
+/** Payment status — mirrors the orders.payment_status ENUM (spec section 4). */
+export type PaymentStatus = "pending" | "paid" | "failed";
+
+/**
+ * A row in GET /api/admin/orders — the light list payload (summary fields +
+ * item count, deliberately no line items; a detail view fetches
+ * GET /api/orders/{id}).
+ */
+export type AdminOrder = {
+  id: number;
+  customer_name: string;
+  phone: string;
+  total_amount: string;
+  status: OrderStatus;
+  payment_method: string;
+  payment_status: PaymentStatus;
+  created_at: string;
+  item_count: number;
+};
+
+/** Payload of POST /api/admin/auth/login. */
+export type AdminAuthPayload = {
+  token: string;
+  refresh_token: string;
+  admin: {
+    id: number;
+    name: string;
+    email: string;
+    role: string;
+    created_at: string;
+  };
+};
+
 /** A line of an order — GET /api/orders/{id} and POST /api/orders. */
 export type OrderLineItem = {
   id: number;
@@ -88,13 +129,13 @@ export type OrderLineItem = {
 export type OrderDetail = {
   id: number;
   user_id: number | null;
-  status: string;
+  status: OrderStatus;
   total_amount: string;
   shipping_address: string;
   customer_name: string;
   phone: string;
   payment_method: string;
-  payment_status: string;
+  payment_status: PaymentStatus;
   created_at: string;
   items: OrderLineItem[];
 };

@@ -1,9 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Playfair_Display } from "next/font/google";
-import Footer from "@/components/footer";
-import Header from "@/components/header";
-import WhatsAppButton from "@/components/whatsapp-button";
-import { CartProvider } from "@/lib/cart-context";
+import StorefrontShell from "@/components/storefront-shell";
 import "./globals.css";
 
 // Typography plan (spec 3.6.1.1):
@@ -36,12 +33,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${inter.variable} ${playfair.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
-        <CartProvider>
-          <Header />
-          <div className="flex flex-1 flex-col">{children}</div>
-          <Footer />
-          <WhatsAppButton />
-        </CartProvider>
+        <StorefrontShell>{children}</StorefrontShell>
       </body>
     </html>
   );
