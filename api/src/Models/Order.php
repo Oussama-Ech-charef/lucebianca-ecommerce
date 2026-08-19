@@ -5,9 +5,17 @@ namespace App\Models;
 /**
  * Order — data holder for the orders table.
  * user_id is nullable because Guest Checkout is supported.
+ *
+ * The two ENUM columns (spec section 4) are mirrored here as constants so the
+ * controller and repository validate against the same allowed values — an
+ * invalid status/payment_status is rejected before it ever reaches the DB.
  */
 final class Order
 {
+    public const STATUSES = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
+
+    public const PAYMENT_STATUSES = ['pending', 'paid', 'failed'];
+
     public function __construct(
         public int $id,
         public ?int $userId,

@@ -257,6 +257,27 @@ final class OrderService
     }
 
     /**
+     * Updates order status / payment_status and returns the fresh order
+     * with its line items (the same join the confirmation page uses).
+     *
+     * Values must already be validated against Order::STATUSES /
+     * Order::PAYMENT_STATUSES by the controller — the repository only writes
+     * whitelisted columns, so arbitrary strings never reach the ENUM columns.
+     *
+     * @param int   $id     Order id to update.
+     * @param array $fields Subset of: status, payment_status.
+     *
+     * @return Order|null The updated order (with items), or null when the id
+     *                    does not exist.
+     */
+    public function updateStatus(int $id, array $fields): ?Order
+    {
+        $this->orders->updateStatus($id, $fields);
+
+        return $this->getOrder($id);
+    }
+
+    /**
      * Normalizes + validates a raw items payload into clean lines.
      *
      * @param array<int, mixed> $lines Raw lines.

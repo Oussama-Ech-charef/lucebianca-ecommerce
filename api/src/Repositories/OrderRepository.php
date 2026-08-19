@@ -91,6 +91,93 @@ final class OrderRepository extends Repository
     }
 
     /**
+     * Paginated, optionally status-filtered order list for the admin panel.
+     *
+     * The list payload stays light (scalability requirement 3.2 + phase-9
+     * scope): each row is the order summary the orders table shows — no
+     * order_items here, just an item_count. Full items come from
+     * GET /api/orders/{id} when an admin expands a row.
+     *
+     * @param int         $page   1-based page number.
+     * @param int         $perPage Items per page (capped by the controller).
+     * @param string|null $status  Optional status filter (must already be a
+     *                             valid Order::STATUSES value — the controller
+     *                             validates before calling).
+     *
+     * @return array{items: array<int, array<string, mixed>>, total: int}
+     */
+    public function paginate(int $page, int $perPage, ?string $status = null): array
+    {
+        $whereSql = '';
+        if ($status !== null && $status !== '') {
+            $whereSql = ' WHERE o.status = :status';
+        }
+
+        $countStmt = $this->db->prepare(
+            "SELECT COUNT(*) AS total
+               FROM orders o
+              {$whereSql}"
+        );
+        if ($whereSql !== '') {
+            $countStmt->bindValue(':status', $status);
+        }
+        $countStmt->execute();
+        $total = (int) $countStmt->fetchColumn();
+
+        $offset = ($page - 1) * $perPage;
+        $stmt   = $this->db->prepare(
+            "SELECT o.id, o.customer_name, o.phone, o.total_amount, o.status,
+                    o.payment_method, o.payment_status, o.created_at,
+                    (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS item_count
+               FROM orders o
+              {$whereSql}
+              ORDER BY o.created_at DESC, o.id DESC
+              LIMIT :limit OFFSET :offset"
+        );
+        if ($whereSql !== '') {
+            $stmt->bindValue(':status', $status);
+        }
+        $stmt->bindValue(':limit', $perPage, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return ['items' => $stmt->fetchAll(), 'total' => $total];
+    }
+
+    /**
+     * Updates only the provided whitelisted order columns.
+     *
+     * @param int   $id     Order id to update.
+     * @param array $fields Subset of: status, payment_status. Caller must have
+     *                      validated both against Order::STATUSES /
+     *                      Order::PAYMENT_STATUSES — this method never accepts
+     *                      arbitrary strings (spec 3.1 strict validation).
+     */
+    public function updateStatus(int $id, array $fields): void
+    {
+        $allowed = ['status' => true, 'payment_status' => true];
+
+        $sets = [];
+        foreach ($fields as $key => $value) {
+            if (isset($allowed[$key])) {
+                $sets[] = "{$key} = :{$key}";
+            }
+        }
+        if ($sets === []) {
+            return; // nothing whitelisted to change
+        }
+
+        $stmt = $this->db->prepare('UPDATE orders SET ' . implode(', ', $sets) . ' WHERE id = :id');
+        $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
+        foreach ($fields as $key => $value) {
+            if (isset($allowed[$key])) {
+                $stmt->bindValue(":{$key}", (string) $value);
+            }
+        }
+        $stmt->execute();
+    }
+
+    /**
      * Finds an order by primary key.
      *
      * @return Order|null Null when the id does not exist.
