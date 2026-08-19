@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 import { ApiError } from "@/lib/api";
+import { OG_IMAGE, SITE_URL } from "@/lib/site";
 import {
   buildProductQuery,
   fetchCategories,
@@ -15,6 +16,22 @@ export const metadata: Metadata = {
   title: "Shop",
   description:
     "Browse the full Luce Bianca collection — classic fits and original artwork. Filter by category, size, color, and price.",
+  openGraph: {
+    type: "website",
+    siteName: "Luce Bianca",
+    title: "Shop",
+    description:
+      "Browse the full Luce Bianca collection — classic fits and original artwork. Filter by category, size, color, and price.",
+    url: `${SITE_URL}/shop`,
+    images: [OG_IMAGE],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Shop",
+    description:
+      "Browse the full Luce Bianca collection — classic fits and original artwork. Filter by category, size, color, and price.",
+    images: [OG_IMAGE],
+  },
 };
 
 export default async function ShopPage({ searchParams }: PageProps<"/shop">) {
