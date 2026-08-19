@@ -1,22 +1,31 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import { useCart } from "@/lib/cart-context";
 import { formatPrice } from "@/lib/storefront";
 import type { Variant } from "@/lib/types";
 
 /**
- * Size + color selection driven entirely by the API's variant list. The
- * "Add to cart" button is intentionally inert: cart/checkout arrive in
- * phase 6, so this phase shows the state but performs no action.
+ * Size + color selection driven entirely by the API's variant list. Adds the
+ * chosen variant to the client-side cart (phase 7).
  */
 export default function VariantSelector({
   variants,
   basePrice,
+  productName,
+  productSlug,
+  mainImage,
 }: {
   variants: Variant[];
   basePrice: string;
+  productName: string;
+  productSlug: string;
+  mainImage: string | null;
 }) {
+  const { addItem } = useCart();
+  const [added, setAdded] = useState(false);
   const sizes = useMemo(
     () => Array.from(new Set(variants.map((variant) => variant.size))),
     [variants],
@@ -65,6 +74,29 @@ export default function VariantSelector({
     if (!compatibleColors.includes(color ?? "")) {
       setColor(compatibleColors[0] ?? null);
     }
+  }
+
+  function handleAdd() {
+    if (!selected) {
+      return;
+    }
+    addItem(
+      {
+        variant_id: selected.id,
+        product_id: selected.product_id,
+        product_slug: productSlug,
+        product_name: productName,
+        image_url: mainImage,
+        size: selected.size,
+        color: selected.color,
+        sku: selected.sku,
+        unit_price: Number(selected.price ?? basePrice),
+        stock_quantity: selected.stock_quantity,
+      },
+      1,
+    );
+    setAdded(true);
+    window.setTimeout(() => setAdded(false), 2500);
   }
 
   const chip =
@@ -170,15 +202,24 @@ export default function VariantSelector({
 
       <button
         type="button"
-        disabled={!inStock || variants.length === 0}
-        title="Cart and checkout arrive in phase 6"
+        onClick={handleAdd}
+        disabled={!selected || !inStock || variants.length === 0}
         className="mt-6 w-full rounded-lg bg-neutral-900 px-6 py-3 font-medium text-white transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-300"
       >
-        Add to Cart
+        {added ? "Added to Cart ✓" : "Add to Cart"}
       </button>
-      <p className="mt-3 text-center text-xs text-neutral-400">
-        Cart and checkout arrive in a later phase.
-      </p>
+      {added ? (
+        <p className="mt-3 text-center text-xs text-green-700">
+          Added to your cart.{" "}
+          <Link href="/cart" className="underline underline-offset-2">
+            View cart
+          </Link>
+        </p>
+      ) : (
+        <p className="mt-3 text-center text-xs text-neutral-400">
+          Free returns · Delivery in Casablanca
+        </p>
+      )}
     </div>
   );
 }

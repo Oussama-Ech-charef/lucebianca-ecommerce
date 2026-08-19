@@ -8,7 +8,9 @@
 
 import { api } from "@/lib/api";
 import type {
+  CartValidationResponse,
   CategoriesResponse,
+  OrderDetail,
   Paginated,
   ProductDetail,
   ShopProduct,
@@ -71,4 +73,43 @@ export function fetchProductDetail(slug: string) {
 /** GET /api/categories — drives the shop's category filter. */
 export function fetchCategories() {
   return api<CategoriesResponse>("/api/categories");
+}
+
+/**
+ * GET /api/orders/{id} — a single order with its lines, for the order
+ * confirmation page. Throws ApiError(404) when the order does not exist.
+ */
+export function fetchOrder(id: number | string) {
+  return api<{ data: OrderDetail }>(`/api/orders/${encodeURIComponent(String(id))}`);
+}
+
+/**
+ * POST /api/cart — validates each cart line against live stock and prices.
+ * Called by the checkout form on load and again at submit time.
+ */
+export function validateCart(
+  items: { variant_id: number; quantity: number; unit_price?: number }[],
+) {
+  return api<CartValidationResponse>("/api/cart", {
+    method: "POST",
+    body: { items },
+  });
+}
+
+/**
+ * POST /api/orders — places a guest order (COD or WhatsApp payment method).
+ * Returns 201 with the created order; throws ApiError(409) on a stock
+ * conflict and ApiError(422) on invalid input.
+ */
+export function placeOrder(payload: {
+  customer_name: string;
+  phone: string;
+  shipping_address: string;
+  payment_method: "cod" | "whatsapp";
+  items: { variant_id: number; quantity: number }[];
+}) {
+  return api<{ data: OrderDetail }>("/api/orders", {
+    method: "POST",
+    body: payload,
+  });
 }

@@ -1,14 +1,12 @@
-// WHATSAPP_NUMBER is a placeholder — replace with the store's real
-// International format: 212XXXXXXXXX.
-const WHATSAPP_NUMBER = "212612345678";
-const WHATSAPP_MESSAGE = encodeURIComponent(
-  "Hello Luce Bianca! I'm interested in your collection.",
-);
+import {
+  buildWhatsAppLink,
+  WHATSAPP_GENERIC_MESSAGE,
+} from "@/lib/whatsapp";
 
 export default function WhatsAppButton() {
   return (
     <a
-      href={`https://wa.me/${WHATSAPP_NUMBER}?text=${WHATSAPP_MESSAGE}`}
+      href={buildWhatsAppLink(WHATSAPP_GENERIC_MESSAGE)}
       target="_blank"
       rel="noopener noreferrer"
       aria-label="Chat with Luce Bianca on WhatsApp"

@@ -57,6 +57,11 @@ export default async function ProductPage({ params }: PageProps) {
     product.variants.length === 0 ||
     product.variants.some((variant) => variant.stock_quantity > 0);
 
+  const mainImage =
+    product.images.find((image) => image.is_main === 1)?.image_url ??
+    product.images[0]?.image_url ??
+    null;
+
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "Product",
@@ -104,6 +109,9 @@ export default async function ProductPage({ params }: PageProps) {
             <VariantSelector
               variants={product.variants}
               basePrice={product.base_price}
+              productName={product.name}
+              productSlug={product.slug}
+              mainImage={mainImage}
             />
           </div>
 
