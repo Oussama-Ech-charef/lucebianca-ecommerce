@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { cache } from "react";
 
 import { ApiError } from "@/lib/api";
+import { OG_IMAGE, SITE_URL } from "@/lib/site";
 import { fetchProductDetail, formatPrice } from "@/lib/storefront";
 import type { ProductDetail } from "@/lib/types";
 import Gallery from "./gallery";
@@ -24,6 +25,21 @@ const getProduct = cache(async (slug: string): Promise<ProductDetail | null> => 
   }
 });
 
+function productMainImage(product: ProductDetail): string | null {
+  return (
+    product.images.find((image) => image.is_main === 1)?.image_url ??
+    product.images[0]?.image_url ??
+    null
+  );
+}
+
+function productLowPrice(product: ProductDetail): number {
+  const prices = product.variants
+    .map((variant) => Number(variant.price ?? product.base_price))
+    .filter((value) => Number.isFinite(value));
+  return prices.length > 0 ? Math.min(...prices) : Number(product.base_price);
+}
+
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
   const product = await getProduct(slug);
@@ -32,11 +48,37 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     return { title: "Product not found" };
   }
 
+  const description =
+    product.meta_description ?? product.description ?? undefined;
+  const mainImage = productMainImage(product);
+  const priceLine = `From ${formatPrice(productLowPrice(product))}`;
+  const ogDescription = description
+    ? `${description} — ${priceLine}`
+    : priceLine;
+
   return {
     title: product.meta_title
       ? { absolute: product.meta_title }
       : product.name,
-    description: product.meta_description ?? product.description ?? undefined,
+    description,
+    openGraph: {
+      type: "website",
+      siteName: "Luce Bianca",
+      title: product.meta_title ?? product.name,
+      description: ogDescription,
+      url: `${SITE_URL}/product/${product.slug}`,
+      // Product image when present; otherwise the root logo fallback
+      // (OG_IMAGE) — a child openGraph does not inherit the layout's image.
+      images: mainImage
+        ? [{ url: mainImage, alt: product.name }]
+        : [OG_IMAGE],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: product.meta_title ?? product.name,
+      description: ogDescription,
+      images: mainImage ? [mainImage] : [OG_IMAGE],
+    },
   };
 }
 
@@ -57,10 +99,7 @@ export default async function ProductPage({ params }: PageProps) {
     product.variants.length === 0 ||
     product.variants.some((variant) => variant.stock_quantity > 0);
 
-  const mainImage =
-    product.images.find((image) => image.is_main === 1)?.image_url ??
-    product.images[0]?.image_url ??
-    null;
+  const mainImage = productMainImage(product);
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -81,12 +120,43 @@ export default async function ProductPage({ params }: PageProps) {
     },
   };
 
+  const breadcrumbLd = {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      {
+        "@type": "ListItem",
+        position: 1,
+        name: "Home",
+        item: `${SITE_URL}/`,
+      },
+      {
+        "@type": "ListItem",
+        position: 2,
+        name: "Shop",
+        item: `${SITE_URL}/shop`,
+      },
+      {
+        "@type": "ListItem",
+        position: 3,
+        name: product.name,
+        item: `${SITE_URL}/product/${product.slug}`,
+      },
+    ],
+  };
+
   return (
     <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-10">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{
           __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c"),
+        }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(breadcrumbLd).replace(/</g, "\\u003c"),
         }}
       />
 
