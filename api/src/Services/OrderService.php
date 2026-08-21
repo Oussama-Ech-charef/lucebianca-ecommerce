@@ -118,6 +118,10 @@ final class OrderService
      * @param string          $shippingAddress Shipping address.
      * @param string          $paymentMethod   'cod' | 'whatsapp' (card rejected).
      * @param array<int, mixed> $lines         {variant_id, quantity} lines.
+     * @param int|null        $userId          Optional authenticated customer id
+     *                                         (null = guest checkout) so a
+     *                                         logged-in order shows up on the
+     *                                         customer's /account page.
      *
      * @return Order The created order with its line items populated.
      *
@@ -129,7 +133,8 @@ final class OrderService
         string $phone,
         string $shippingAddress,
         string $paymentMethod,
-        array $lines
+        array $lines,
+        ?int $userId = null
     ): Order {
         // --- Customer fields ---
         $errors = Validator::validate(
@@ -207,7 +212,7 @@ final class OrderService
                 'customer_name'    => $customerName,
                 'phone'            => $phone,
                 'payment_method'   => $paymentMethod,
-            ]);
+            ], $userId);
 
             foreach ($resolved as $line) {
                 $this->orders->insertItem(

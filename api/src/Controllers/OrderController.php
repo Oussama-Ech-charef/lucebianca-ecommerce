@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use App\Core\Auth;
 use App\Core\ConflictException;
 use App\Core\Request;
 use App\Core\ValidationException;
@@ -15,6 +16,11 @@ use App\Services\OrderService;
  * (CMI/Payzone arrives in phase 8). show() is public per spec (guest checkout
  * has no auth) — anyone with an order id can read it; a future phase can add
  * a lookup token if tighter privacy is wanted.
+ *
+ * A logged-in customer's order is attributed to their account: when the
+ * request carries a valid customer Bearer token, orders.user_id is set so the
+ * order appears on /account. An absent or invalid token degrades gracefully
+ * to guest checkout (never blocks placing an order).
  */
 final class OrderController extends Controller
 {
@@ -42,7 +48,8 @@ final class OrderController extends Controller
                 trim((string) $request->input('phone', '')),
                 trim((string) $request->input('shipping_address', '')),
                 (string) $request->input('payment_method', ''),
-                is_array($request->input('items')) ? $request->input('items') : []
+                is_array($request->input('items')) ? $request->input('items') : [],
+                $this->authenticatedCustomerId($request)
             );
         } catch (ValidationException $e) {
             $this->error($e->getMessage(), 422, ['errors' => $e->errors()]);
@@ -51,6 +58,36 @@ final class OrderController extends Controller
         }
 
         $this->json(['data' => $order->toArray()], 201);
+    }
+
+    /**
+     * Resolves an optional authenticated customer id from the request.
+     *
+     * The route is public (guest checkout), so the token is never required:
+     * when present AND a valid customer token, its sub becomes the order's
+     * user_id; a missing, expired or non-customer token simply yields null
+     * (guest order) instead of failing the checkout.
+     *
+     * @return int|null The customer id, or null for a guest order.
+     */
+    private function authenticatedCustomerId(Request $request): ?int
+    {
+        $token = $request->bearerToken();
+        if ($token === null) {
+            return null;
+        }
+
+        try {
+            $claims = Auth::verify($token);
+        } catch (\RuntimeException) {
+            return null;
+        }
+
+        if (($claims['role'] ?? '') !== 'user' || !isset($claims['sub'])) {
+            return null;
+        }
+
+        return (int) $claims['sub'];
     }
 
     /**

@@ -15,25 +15,36 @@ use App\Repositories\UserRepository;
 /**
  * AuthService — authentication business logic.
  *
- * Implements registration (password_hash, duplicate-email guard) and
- * login (password_verify + JWT + refresh token issuance). Google OAuth
- * is deliberately left as a stub — separate future task.
+ * Implements registration (password_hash, duplicate-email guard), login
+ * (password_verify + JWT + refresh token issuance) and Google OAuth
+ * (create-or-link by verified email). Password rule: MIN_PASSWORD_LENGTH = 8 —
+ * a reasonable floor for this store's audience, enforced server-side here.
  *
- * Password rule: MIN_PASSWORD_LENGTH = 8. A reasonable floor for this
- * store's audience; not enforced anywhere client-side alone — the rule
- * is enforced server-side here and documented in the phase doc.
+ * Phase 16 (email verification): a verification link is emailed to new
+ * password-registered customers via EmailService (Resend). Sending is
+ * best-effort — a failed send never fails registration. Google accounts are
+ * created already verified (Google proves the address) and never carry a
+ * token. Verification is informational: login and checkout are not blocked
+ * on it.
  */
 final class AuthService
 {
     private const MIN_PASSWORD_LENGTH = 8;
 
+    /** Verification links stop working 24 h after issue. */
+    private const VERIFICATION_TTL_SECONDS = 86400;
+
     private UserRepository $users;
     private RefreshTokenRepository $refreshTokens;
+    private GoogleOAuthService $google;
+    private EmailService $email;
 
     public function __construct()
     {
-        $this->users = new UserRepository();
+        $this->users         = new UserRepository();
         $this->refreshTokens = new RefreshTokenRepository();
+        $this->google        = new GoogleOAuthService();
+        $this->email         = new EmailService();
     }
 
     /**
@@ -79,6 +90,20 @@ final class AuthService
             $phone
         );
 
+        // Phase 16: email the one-time verification link. Best-effort by
+        // design — a failed send never fails registration (the account
+        // exists, just unverified, and the user can resend from /account).
+        try {
+            $token  = $this->newVerificationToken();
+            $this->users->setEmailVerification($userId, $token, $this->verificationExpiry());
+            $user = $this->users->findById($userId);
+            if ($user !== null) {
+                $this->sendVerificationEmail($user);
+            }
+        } catch (\Throwable $e) {
+            error_log('Luce Bianca: verification email not sent: ' . $e->getMessage());
+        }
+
         return $this->issueTokenPair($userId);
     }
 
@@ -117,17 +142,129 @@ final class AuthService
     }
 
     /**
-     * Exchange a Google OAuth code for tokens/account.
+     * Register/log in a user from a verified Google ID token.
      *
-     * NOT IMPLEMENTED — separate future task. Route stays a 501 stub.
+     * Create-or-link by email: Google has already verified the account, so
+     * an existing user with the same email is linked (their google_id is set)
+     * rather than rejected, and a brand-new email creates a user with an
+     * unusable random password hash (password_hash stays NOT NULL; a Google
+     * user has no password, so password_verify() always fails for them).
      *
-     * @throws \RuntimeException When the code exchange fails.
+     * @param string $idToken The JWT returned by Google Identity Services.
+     *
+     * @throws InvalidCredentialsException When the token fails verification.
+     * @throws \RuntimeException           When Google cannot be reached.
      *
      * @return array{token: string, refresh_token: string, user: array} Auth payload.
      */
-    public function loginWithGoogle(string $code): array
+    public function loginWithGoogle(string $idToken): array
     {
-        throw new \RuntimeException('Google Sign-In not implemented yet (phase 3).');
+        $claims = $this->google->verifyIdToken($idToken);
+
+        $user = $this->users->findByGoogleId($claims['sub']);
+
+        if ($user === null) {
+            $user = $this->users->findByEmail($claims['email']);
+
+            if ($user === null) {
+                // No usable password for a Google-only account.
+                $passwordHash = password_hash(bin2hex(random_bytes(16)), PASSWORD_DEFAULT);
+                $userId = $this->users->create(
+                    $claims['name'] ?? $this->defaultNameFromEmail($claims['email']),
+                    $claims['email'],
+                    $passwordHash,
+                    null,
+                    $claims['sub'],
+                    true
+                );
+                $user = $this->users->findById($userId);
+            } elseif ($user->googleId === null) {
+                // Existing email/password user signs in with Google — link it.
+                $this->users->linkGoogle($user->id, $claims['sub']);
+            }
+        }
+
+        /** @var User $user A row must exist after the create/lookup above. */
+        return $this->issueTokenPair($user->id);
+    }
+
+    /**
+     * Verifies a customer's email via their one-time link token.
+     *
+     * The token is single-use: marking the email verified also clears the
+     * token and expiry, so the same link can never be replayed. Expired
+     * links are rejected with a clear message directing the user to request
+     * a new one (from /account or the resend endpoint).
+     *
+     * @throws ValidationException      When no token is supplied.
+     * @throws InvalidCredentialsException When the token is unknown/already used
+     *                                  or expired.
+     */
+    public function verifyEmail(string $token): void
+    {
+        $errors = Validator::validate(
+            ['token' => $token],
+            ['token' => ['required']]
+        );
+        if ($errors !== []) {
+            throw new ValidationException($errors);
+        }
+
+        $user = $this->users->findByEmailVerificationToken($token);
+
+        if ($user === null) {
+            throw new InvalidCredentialsException(
+                'This verification link is invalid or has already been used.'
+            );
+        }
+
+        $expiresAt = $user->emailVerificationExpiresAt;
+        if ($expiresAt === null || strtotime($expiresAt) < time()) {
+            throw new InvalidCredentialsException(
+                'This verification link has expired. Request a new one from your account.'
+            );
+        }
+
+        $this->users->markEmailVerified($user->id);
+    }
+
+    /**
+     * Re-sends the verification email for an account.
+     *
+     * Anti-enumeration: the response is identical whether the email exists,
+     * is already verified, or is unknown — only a real, unverified account
+     * gets a fresh link (the old token is overwritten, so a stale link dies
+     * immediately). The send itself is best-effort like registration.
+     *
+     * @throws ValidationException When the email is missing/invalid.
+     */
+    public function resendVerification(string $email): void
+    {
+        $errors = Validator::validate(
+            ['email' => $email],
+            ['email' => ['required', 'email']]
+        );
+        if ($errors !== []) {
+            throw new ValidationException($errors);
+        }
+
+        $user = $this->users->findByEmail(strtolower(trim($email)));
+
+        if ($user === null || $user->emailVerified) {
+            return;
+        }
+
+        $token = $this->newVerificationToken();
+        $this->users->setEmailVerification($user->id, $token, $this->verificationExpiry());
+
+        try {
+            $user = $this->users->findById($user->id);
+            if ($user !== null) {
+                $this->sendVerificationEmail($user);
+            }
+        } catch (\Throwable $e) {
+            error_log('Luce Bianca: verification email not sent: ' . $e->getMessage());
+        }
     }
 
     /**
@@ -244,5 +381,54 @@ final class AuthService
     private function hashToken(string $refreshToken): string
     {
         return hash('sha256', $refreshToken);
+    }
+
+    /**
+     * A fresh, unguessable verification token (64 hex chars = 32 random bytes).
+     */
+    private function newVerificationToken(): string
+    {
+        return bin2hex(random_bytes(32));
+    }
+
+    /**
+     * UTC datetime when a newly issued verification token stops being valid.
+     */
+    private function verificationExpiry(): string
+    {
+        return date('Y-m-d H:i:s', time() + self::VERIFICATION_TTL_SECONDS);
+    }
+
+    /**
+     * The storefront origin the verification link must point at — the same
+     * value the frontend uses as NEXT_PUBLIC_SITE_URL (see api/.env SITE_URL).
+     */
+    private function verificationBaseUrl(): string
+    {
+        return rtrim((string) Env::get('SITE_URL', 'http://localhost:3000'), '/');
+    }
+
+    /**
+     * Emails the user's pending verification link. The token must already be
+     * stored on the row (setEmailVerification) before this is called.
+     */
+    private function sendVerificationEmail(User $user): void
+    {
+        $link = $this->verificationBaseUrl()
+            . '/verify-email?token='
+            . rawurlencode((string) $user->emailVerificationToken);
+
+        $this->email->sendVerificationEmail($user->email, $user->name, $link);
+    }
+
+    /**
+     * Fallback display name from the email's local part when Google does not
+     * provide one ("jane.doe@gmail.com" -> "jane.doe").
+     */
+    private function defaultNameFromEmail(string $email): string
+    {
+        $local = explode('@', $email)[0] ?? $email;
+
+        return $local === '' ? 'Customer' : $local;
     }
 }

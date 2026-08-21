@@ -22,17 +22,20 @@ final class OrderRepository extends Repository
      *   total_amount: string, shipping_address: string,
      *   customer_name: string, phone: string, payment_method: string
      * } $data Order columns.
+     * @param int|null $userId Optional authenticated customer id — NULL for
+     *                         guest checkout (orders.user_id is nullable).
      *
      * @return int Auto-increment id of the new record.
      */
-    public function insertOrder(array $data): int
+    public function insertOrder(array $data, ?int $userId = null): int
     {
         $stmt = $this->db->prepare(
             'INSERT INTO orders
                (user_id, status, total_amount, shipping_address, customer_name, phone, payment_method, payment_status)
              VALUES
-               (NULL, \'pending\', :total_amount, :shipping_address, :customer_name, :phone, :payment_method, \'pending\')'
+               (:user_id, \'pending\', :total_amount, :shipping_address, :customer_name, :phone, :payment_method, \'pending\')'
         );
+        $stmt->bindValue(':user_id', $userId, \PDO::PARAM_INT);
         $stmt->bindValue(':total_amount', $data['total_amount']);
         $stmt->bindValue(':shipping_address', $data['shipping_address']);
         $stmt->bindValue(':customer_name', $data['customer_name']);
@@ -137,6 +140,46 @@ final class OrderRepository extends Repository
         if ($whereSql !== '') {
             $stmt->bindValue(':status', $status);
         }
+        $stmt->bindValue(':limit', $perPage, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return ['items' => $stmt->fetchAll(), 'total' => $total];
+    }
+
+    /**
+     * Paginated order list scoped to one customer (the /account page).
+     *
+     * Same light payload as paginate() (summary fields + item_count, no line
+     * items) but always filtered by orders.user_id, so a customer can only
+     * ever see their own orders.
+     *
+     * @param int $userId  Owner account id.
+     * @param int $page    1-based page number.
+     * @param int $perPage Items per page (capped by the controller).
+     *
+     * @return array{items: array<int, array<string, mixed>>, total: int}
+     */
+    public function paginateForUser(int $userId, int $page, int $perPage): array
+    {
+        $countStmt = $this->db->prepare(
+            'SELECT COUNT(*) AS total FROM orders o WHERE o.user_id = :user_id'
+        );
+        $countStmt->bindValue(':user_id', $userId, \PDO::PARAM_INT);
+        $countStmt->execute();
+        $total = (int) $countStmt->fetchColumn();
+
+        $offset = ($page - 1) * $perPage;
+        $stmt   = $this->db->prepare(
+            'SELECT o.id, o.customer_name, o.phone, o.total_amount, o.status,
+                    o.payment_method, o.payment_status, o.created_at,
+                    (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS item_count
+               FROM orders o
+              WHERE o.user_id = :user_id
+              ORDER BY o.created_at DESC, o.id DESC
+              LIMIT :limit OFFSET :offset'
+        );
+        $stmt->bindValue(':user_id', $userId, \PDO::PARAM_INT);
         $stmt->bindValue(':limit', $perPage, \PDO::PARAM_INT);
         $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
         $stmt->execute();

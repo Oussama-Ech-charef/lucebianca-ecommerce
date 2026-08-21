@@ -17,6 +17,7 @@ declare(strict_types=1);
 use App\Core\AuthMiddleware;
 use App\Core\Request;
 use App\Core\Router;
+use App\Controllers\AccountController;
 use App\Controllers\Admin\AuthController as AdminAuthController;
 use App\Controllers\Admin\DashboardController;
 use App\Controllers\Admin\OrdersController;
@@ -50,6 +51,13 @@ $router->post('/api/auth/login', [AuthController::class, 'login']);
 $router->post('/api/auth/refresh', [AuthController::class, 'refresh']);
 $router->post('/api/auth/logout', [AuthController::class, 'logout']);
 $router->post('/api/auth/google', [AuthController::class, 'google']);
+$router->get('/api/auth/verify-email', [AuthController::class, 'verifyEmail']);
+$router->post('/api/auth/resend-verification', [AuthController::class, 'resendVerification']);
+
+// --- Customer account (JWT role "user" on every route) ---
+$customerMiddleware = [new AuthMiddleware('user')];
+$router->get('/api/account', [AccountController::class, 'me'], $customerMiddleware);
+$router->get('/api/account/orders', [AccountController::class, 'orders'], $customerMiddleware);
 
 // --- Contact form (rate limiting added in the security phase) ---
 $router->post('/api/contact', [ContactController::class, 'store']);

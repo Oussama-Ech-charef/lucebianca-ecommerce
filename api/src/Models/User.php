@@ -16,7 +16,11 @@ final class User
         public string $email,
         public string $passwordHash,
         public ?string $phone,
-        public string $createdAt
+        public string $createdAt,
+        public ?string $googleId = null,
+        public bool $emailVerified = false,
+        public ?string $emailVerificationToken = null,
+        public ?string $emailVerificationExpiresAt = null
     ) {
     }
 
@@ -31,7 +35,11 @@ final class User
             (string) $row['email'],
             (string) $row['password_hash'],
             $row['phone'] ?? null,
-            (string) $row['created_at']
+            (string) $row['created_at'],
+            $row['google_id'] ?? null,
+            (bool) ($row['email_verified'] ?? 0),
+            $row['email_verification_token'] ?? null,
+            $row['email_verification_expires_at'] ?? null
         );
     }
 
@@ -41,11 +49,12 @@ final class User
     public function toArray(): array
     {
         return [
-            'id'         => $this->id,
-            'name'       => $this->name,
-            'email'      => $this->email,
-            'phone'      => $this->phone,
-            'created_at' => $this->createdAt,
+            'id'             => $this->id,
+            'name'           => $this->name,
+            'email'          => $this->email,
+            'phone'          => $this->phone,
+            'email_verified' => $this->emailVerified,
+            'created_at'     => $this->createdAt,
         ];
     }
 }

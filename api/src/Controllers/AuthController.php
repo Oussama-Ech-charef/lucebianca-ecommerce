@@ -11,10 +11,12 @@ use App\Services\AuthService;
 /**
  * AuthController — public registration / login / Google OAuth.
  *
- * register and login are implemented (password_hash, JWT + refresh
- * token issuance via App\Services\AuthService). Server-side validation
- * errors become 422 with per-field details; a duplicate email is 409;
- * bad credentials are 401. google() remains a 501 stub — separate task.
+ * register, login, refresh and logout are implemented (password_hash, JWT +
+ * refresh token issuance via App\Services\AuthService). google() verifies a
+ * Google ID token server-side and creates-or-links the account by email.
+ * Server-side validation errors become 422 with per-field details; a
+ * duplicate email is 409; bad credentials are 401; a failed Google
+ * verification is 401; Google being unreachable is 502.
  */
 final class AuthController extends Controller
 {
@@ -117,10 +119,73 @@ final class AuthController extends Controller
     /**
      * POST /api/auth/google — register/login via Google OAuth 2.0.
      *
-     * NOT implemented yet — separate future task.
+     * Body: {"id_token": "<JWT from Google Identity Services>"}. The token is
+     * verified server-side (signature via Google + aud/iss/exp/email checks in
+     * App\Services\GoogleOAuthService) and the account is created or linked by
+     * verified email, then the standard JWT + refresh token pair is issued.
+     *
+     * @return never 200 with the auth payload, 422 on a missing token,
+     *               401 on an invalid/rejected token, 502 when Google is
+     *               unreachable.
      */
     public function google(Request $request): never
     {
-        $this->notImplemented('Google Sign-In');
+        try {
+            $payload = $this->auth->loginWithGoogle((string) $request->input('id_token', ''));
+        } catch (ValidationException $e) {
+            $this->error($e->getMessage(), 422, ['errors' => $e->errors()]);
+        } catch (InvalidCredentialsException $e) {
+            $this->error($e->getMessage(), 401);
+        } catch (\RuntimeException $e) {
+            $this->error('Google sign-in is temporarily unavailable. Please try again.', 502);
+        }
+
+        $this->json($payload);
+    }
+
+    /**
+     * GET /api/auth/verify-email — confirm a customer's email address.
+     *
+     * Query: ?token=<one-time verification token from the emailed link>. On
+     * success the user is marked verified and the token is cleared (single
+     * use). Validation errors are 422; an unknown/already-used/expired token
+     * is a clean 400 with a human-readable message.
+     *
+     * @return never 200 with a success message, or 422/400 on errors.
+     */
+    public function verifyEmail(Request $request): never
+    {
+        try {
+            $this->auth->verifyEmail((string) $request->query('token', ''));
+        } catch (ValidationException $e) {
+            $this->error($e->getMessage(), 422, ['errors' => $e->errors()]);
+        } catch (InvalidCredentialsException $e) {
+            $this->error($e->getMessage(), 400);
+        }
+
+        $this->json(['message' => 'Your email address has been verified.']);
+    }
+
+    /**
+     * POST /api/auth/resend-verification — re-send the verification email.
+     *
+     * Body: {"email": "..."}. The response is deliberately identical whether
+     * the email is unknown, already verified or unverified (anti-enumeration);
+     * only a real unverified account gets a fresh link, which invalidates the
+     * previous one.
+     *
+     * @return never 200 with a generic message, 422 on a missing/invalid email.
+     */
+    public function resendVerification(Request $request): never
+    {
+        try {
+            $this->auth->resendVerification((string) $request->input('email', ''));
+        } catch (ValidationException $e) {
+            $this->error($e->getMessage(), 422, ['errors' => $e->errors()]);
+        }
+
+        $this->json([
+            'message' => 'If that email belongs to an unverified account, a verification email is on its way.',
+        ]);
     }
 }
