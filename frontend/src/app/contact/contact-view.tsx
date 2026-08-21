@@ -5,13 +5,13 @@ import { useState, type FormEvent } from "react";
 import { submitContactMessage } from "@/lib/storefront";
 
 /**
- * /contact — working contact form (phase 14).
+ * /contact — working contact form with anti-spam protection.
  *
  * Posts to POST /api/contact (server-side validated; stored in
  * contact_messages). Success and error states use the storefront's alert
  * language — green for success, red for errors — so the message type is
  * distinct at a glance. On success the form clears and the confirmation stays
- * visible. Anti-spam (honeypot/rate limiting) is a later security phase.
+ * visible. Anti-spam: honeypot field (invisible to humans) + rate limiting.
  */
 
 const inputClass =
@@ -21,6 +21,7 @@ export default function ContactView() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState("");
+  const [website, setWebsite] = useState(""); // Honeypot field — bots fill it, humans never see it
   const [status, setStatus] = useState<
     "idle" | "submitting" | "success" | "error"
   >("idle");
@@ -56,10 +57,12 @@ export default function ContactView() {
         name: trimmedName,
         email: trimmedEmail,
         message: trimmedMessage,
+        website, // Honeypot — should always be empty for real users
       });
       setName("");
       setEmail("");
       setMessage("");
+      setWebsite("");
       setStatus("success");
     } catch (err) {
       setStatus("error");
@@ -90,6 +93,20 @@ export default function ContactView() {
       ) : null}
 
       <form onSubmit={handleSubmit} className="mt-8" noValidate>
+        {/* Honeypot field — hidden from real users, but bots will fill it */}
+        <div style={{ position: "absolute", left: "-9999px" }} aria-hidden="true">
+          <label htmlFor="contact-website">Website</label>
+          <input
+            id="contact-website"
+            type="text"
+            name="website"
+            tabIndex={-1}
+            autoComplete="off"
+            value={website}
+            onChange={(event) => setWebsite(event.target.value)}
+          />
+        </div>
+
         <label
           htmlFor="contact-name"
           className="block text-sm font-medium text-neutral-700"
