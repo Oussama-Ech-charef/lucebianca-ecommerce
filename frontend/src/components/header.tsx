@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { useCart } from "@/lib/cart-context";
+import { useCustomerSession } from "@/lib/customer-auth";
 import { formatPrice } from "@/lib/storefront";
 
 // Only /shop exists as a route. About/Contact links are deliberately omitted
@@ -19,6 +20,7 @@ export default function Header() {
 
   const { items, totalItems, totalPrice, updateQuantity, removeItem } =
     useCart();
+  const customerSession = useCustomerSession();
 
   function closeAll() {
     setMobileOpen(false);
@@ -70,10 +72,37 @@ export default function Header() {
                 setSearchOpen((open) => !open);
                 setCartOpen(false);
               }}
-              className="rounded-[4px] p-2 text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
+              className="flex h-10 w-10 items-center justify-center rounded-[4px] text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
             >
               <SearchIcon />
             </button>
+            {customerSession !== null ? (
+              <Link
+                href="/account"
+                aria-label="My account"
+                onClick={() => {
+                  setSearchOpen(false);
+                  setCartOpen(false);
+                }}
+                className="flex h-10 w-10 items-center justify-center rounded-[4px] text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
+              >
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-900 text-[10px] font-medium uppercase leading-none text-white">
+                  {customerSession.user.name.charAt(0)}
+                </span>
+              </Link>
+            ) : (
+              <Link
+                href="/login"
+                aria-label="Sign in"
+                onClick={() => {
+                  setSearchOpen(false);
+                  setCartOpen(false);
+                }}
+                className="flex h-10 w-10 items-center justify-center rounded-[4px] text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
+              >
+                <UserIcon />
+              </Link>
+            )}
             <button
               type="button"
               aria-label="Open cart"
@@ -82,7 +111,7 @@ export default function Header() {
                 setCartOpen((open) => !open);
                 setSearchOpen(false);
               }}
-              className="rounded-[4px] p-2 text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
+              className="flex h-10 w-10 items-center justify-center rounded-[4px] text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
             >
               <span className="relative inline-block">
                 <CartIcon />
@@ -101,7 +130,7 @@ export default function Header() {
                 setMobileOpen((open) => !open);
                 setSearchOpen(false);
               }}
-              className="rounded-[4px] p-2 text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900 md:hidden"
+              className="flex h-10 w-10 items-center justify-center rounded-[4px] text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900 md:hidden"
             >
               {mobileOpen ? <CloseIcon /> : <MenuIcon />}
             </button>
@@ -375,6 +404,22 @@ function CartIcon({ className = "h-5 w-5" }: { className?: string }) {
     >
       <path d="M6.5 7h11l1.2 12.5a1.5 1.5 0 0 1-1.5 1.5H6.8a1.5 1.5 0 0 1-1.5-1.5L6.5 7Z" />
       <path d="M9 9V6a3 3 0 0 1 6 0v3" />
+    </svg>
+  );
+}
+
+function UserIcon({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4.5 20a7.5 7.5 0 0 1 15 0" strokeLinecap="round" />
     </svg>
   );
 }
