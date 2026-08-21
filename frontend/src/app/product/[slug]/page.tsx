@@ -5,12 +5,40 @@ import { cache } from "react";
 
 import { ApiError } from "@/lib/api";
 import { OG_IMAGE, SITE_URL } from "@/lib/site";
-import { fetchProductDetail, formatPrice } from "@/lib/storefront";
+import {
+  fetchProductDetail,
+  fetchProducts,
+  formatPrice,
+} from "@/lib/storefront";
 import type { ProductDetail } from "@/lib/types";
 import Gallery from "./gallery";
 import VariantSelector from "./variant-selector";
 
 type PageProps = { params: Promise<{ slug: string }> };
+
+// ISR (spec 3.2: product pages stay fast and SEO-friendly). generateStaticParams
+// prerenders every active product at build; the page is then cached for up to
+// an hour and the first request after the window re-generates it in the
+// background (stale-while-revalidate), so a paused product or price change
+// surfaces within an hour without a rebuild. Unknown slugs are generated
+// on-demand (dynamicParams defaults to true). No conflict with generateMetadata
+// / cache() below — generateMetadata runs within the same cached render and
+// cache() only dedupes in-request fetches.
+export const revalidate = 3600;
+
+export async function generateStaticParams(): Promise<{ slug: string }[]> {
+  const slugs = new Set<string>();
+  let page = 1;
+  while (true) {
+    const response = await fetchProducts({ page: String(page) });
+    response.data.forEach((product) => slugs.add(product.slug));
+    if (page >= response.meta.pages) {
+      break;
+    }
+    page += 1;
+  }
+  return [...slugs].map((slug) => ({ slug }));
+}
 
 // Shared by generateMetadata and the page so the API is hit once per request.
 const getProduct = cache(async (slug: string): Promise<ProductDetail | null> => {
