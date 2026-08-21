@@ -65,9 +65,16 @@ export function fetchProducts(filters: ProductFilters) {
 /**
  * GET /api/products/{slug} — full detail with variants and images.
  * Throws ApiError(404) when the product is paused or missing.
+ *
+ * ISR (spec 3.2): the page is revalidated hourly, so this fetch is cached for
+ * 3600s server-side to match the route's `revalidate`; a paused product or a
+ * price change surfaces within an hour instead of requiring a rebuild.
  */
 export function fetchProductDetail(slug: string) {
-  return api<{ data: ProductDetail }>(`/api/products/${encodeURIComponent(slug)}`);
+  return api<{ data: ProductDetail }>(
+    `/api/products/${encodeURIComponent(slug)}`,
+    { next: { revalidate: 3600 } },
+  );
 }
 
 /** GET /api/categories — drives the shop's category filter. */
@@ -97,18 +104,41 @@ export function validateCart(
 }
 
 /**
- * POST /api/orders — places a guest order (COD or WhatsApp payment method).
+ * POST /api/orders — places an order (COD or WhatsApp payment method).
  * Returns 201 with the created order; throws ApiError(409) on a stock
  * conflict and ApiError(422) on invalid input.
+ *
+ * A customer token is optional: when present (logged-in checkout) the API
+ * attributes the order to the customer (orders.user_id) so it appears on
+ * /account; a guest checkout sends no token and stays anonymous.
  */
-export function placeOrder(payload: {
-  customer_name: string;
-  phone: string;
-  shipping_address: string;
-  payment_method: "cod" | "whatsapp";
-  items: { variant_id: number; quantity: number }[];
-}) {
+export function placeOrder(
+  payload: {
+    customer_name: string;
+    phone: string;
+    shipping_address: string;
+    payment_method: "cod" | "whatsapp";
+    items: { variant_id: number; quantity: number }[];
+  },
+  token?: string,
+) {
   return api<{ data: OrderDetail }>("/api/orders", {
+    method: "POST",
+    body: payload,
+    token,
+  });
+}
+
+/**
+ * POST /api/contact — submits the /contact form message. Returns 201 with the
+ * stored row's id; throws ApiError(422) with per-field errors on bad input.
+ */
+export function submitContactMessage(payload: {
+  name: string;
+  email: string;
+  message: string;
+}) {
+  return api<{ data: { id: number } }>("/api/contact", {
     method: "POST",
     body: payload,
   });

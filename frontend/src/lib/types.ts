@@ -110,6 +110,47 @@ export type AdminAuthPayload = {
   };
 };
 
+/**
+ * A customer profile — GET /api/account (never includes password data).
+ * `email_verified` (phase 16) is informational — login and checkout are not
+ * blocked on it; the /account page surfaces a resend banner when false.
+ */
+export type CustomerUser = {
+  id: number;
+  name: string;
+  email: string;
+  phone: string | null;
+  email_verified: boolean;
+  created_at: string;
+};
+
+/**
+ * Payload of POST /api/auth/register, POST /api/auth/login and
+ * POST /api/auth/google. Persisted under `lucebianca:customer:session:v1` —
+ * a deliberately separate store from the admin session and the cart.
+ */
+export type CustomerAuthPayload = {
+  token: string;
+  refresh_token: string;
+  user: CustomerUser;
+};
+
+/**
+ * A row in GET /api/account/orders — the light list payload (same summary
+ * shape as AdminOrder but scoped to the authenticated customer's own orders).
+ */
+export type CustomerOrder = {
+  id: number;
+  customer_name: string;
+  phone: string;
+  total_amount: string;
+  status: OrderStatus;
+  payment_method: string;
+  payment_status: PaymentStatus;
+  created_at: string;
+  item_count: number;
+};
+
 /** A line of an order — GET /api/orders/{id} and POST /api/orders. */
 export type OrderLineItem = {
   id: number;
