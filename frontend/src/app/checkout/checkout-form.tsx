@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
 import { useCart } from "@/lib/cart-context";
+import { getCustomerSession } from "@/lib/customer-auth";
 import { formatPrice, placeOrder, validateCart } from "@/lib/storefront";
 import type { OrderDetail } from "@/lib/types";
 import { buildWhatsAppLink } from "@/lib/whatsapp";
@@ -175,16 +176,19 @@ export default function CheckoutForm() {
 
     setSubmitting(true);
     try {
-      const response = await placeOrder({
-        customer_name: name.trim(),
-        phone: phone.trim(),
-        shipping_address: address.trim(),
-        payment_method: paymentMethod,
-        items: items.map((item) => ({
-          variant_id: item.variant_id,
-          quantity: item.quantity,
-        })),
-      });
+      const response = await placeOrder(
+        {
+          customer_name: name.trim(),
+          phone: phone.trim(),
+          shipping_address: address.trim(),
+          payment_method: paymentMethod,
+          items: items.map((item) => ({
+            variant_id: item.variant_id,
+            quantity: item.quantity,
+          })),
+        },
+        getCustomerSession()?.token,
+      );
       const order = response.data;
 
       // WhatsApp flow: the order is already created (payment_status stays
