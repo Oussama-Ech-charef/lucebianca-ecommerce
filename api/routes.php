@@ -31,6 +31,7 @@ use App\Controllers\ContactController;
 use App\Controllers\CsrfController;
 use App\Controllers\HealthController;
 use App\Controllers\OrderController;
+use App\Controllers\PaymentController;
 use App\Controllers\ProductController;
 
 $router = new Router();
@@ -59,6 +60,11 @@ $router->get('/api/categories', [CategoryController::class, 'index']);
 $router->post('/api/cart', [CartController::class, 'store'], [$csrfProtection]);
 $router->post('/api/orders', [OrderController::class, 'store'], [$csrfProtection]);
 $router->get('/api/orders/{id}', [OrderController::class, 'show']);
+
+// --- Payments (CMI/Payzone card payment gateway) ---
+$router->post('/api/payments/initiate', [PaymentController::class, 'initiate'], [$csrfProtection]);
+$router->post('/api/payments/callback', [PaymentController::class, 'callback']); // CMI callback, no CSRF
+$router->get('/api/payments/status/{orderId}', [PaymentController::class, 'status']);
 
 // --- Auth (rate-limited login/register to prevent brute-force) ---
 $router->post('/api/auth/register', [AuthController::class, 'register'], [$registerRateLimit]);

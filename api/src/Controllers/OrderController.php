@@ -12,8 +12,9 @@ use App\Services\OrderService;
  * OrderController — placing and reading orders.
  *
  * Guest checkout supported (orders.user_id is NULL — spec section 4).
- * store() accepts 'cod' and 'whatsapp' this phase; 'card' is rejected clearly
- * (CMI/Payzone arrives in phase 8). show() is public per spec (guest checkout
+ * store() accepts 'cod', 'whatsapp', and 'card' payment methods. Card payments
+ * create orders with payment_status='pending' — frontend must initiate payment
+ * via POST /api/payments/initiate. show() is public per spec (guest checkout
  * has no auth) — anyone with an order id can read it; a future phase can add
  * a lookup token if tighter privacy is wanted.
  *
@@ -32,10 +33,14 @@ final class OrderController extends Controller
     }
 
     /**
-     * POST /api/orders — place an order (COD / WhatsApp).
+     * POST /api/orders — place an order (COD / WhatsApp / Card).
      *
      * Body: {"customer_name": "...", "phone": "...", "shipping_address": "...",
-     *        "payment_method": "cod", "items": [{"variant_id": 6, "quantity": 2}]}
+     *        "payment_method": "cod"|"whatsapp"|"card",
+     *        "items": [{"variant_id": 6, "quantity": 2}]}
+     *
+     * For card payments: order is created with payment_status='pending'.
+     * Frontend must then call POST /api/payments/initiate to redirect to CMI.
      *
      * @return never 201 with the created order (+ items), 422 on invalid
      *               input, 409 on stock conflict (nothing partially created).

@@ -154,12 +154,14 @@ final class OrderService
             $errors['phone'] = 'Phone must be a valid number (8-20 digits).';
         }
 
-        // --- Payment method: only the methods this phase can actually
-        //     process. Never silently accept a card order we can't take. ---
-        if (!in_array($paymentMethod, ['cod', 'whatsapp'], true)) {
-            $errors['payment_method'] = $paymentMethod === 'card'
-                ? 'Card payment (CMI/Payzone) is not available yet — choose Cash on Delivery or Order via WhatsApp.'
-                : 'Payment method must be "cod" or "whatsapp".';
+        // --- Payment method: validate against supported methods ---
+        if (!in_array($paymentMethod, ['cod', 'whatsapp', 'card'], true)) {
+            $errors['payment_method'] = 'Payment method must be "cod", "whatsapp", or "card".';
+        }
+
+        // Check if card payment is configured when card method is selected
+        if ($paymentMethod === 'card' && !PaymentService::isConfigured()) {
+            $errors['payment_method'] = 'Card payment is not available. Please choose Cash on Delivery or Order via WhatsApp.';
         }
 
         if ($errors !== []) {
