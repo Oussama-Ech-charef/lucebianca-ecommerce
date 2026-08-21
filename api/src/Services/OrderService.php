@@ -25,10 +25,14 @@ use PDOException;
 final class OrderService
 {
     private OrderRepository $orders;
+    private EmailService $email;
+    private NotificationService $notifications;
 
     public function __construct()
     {
         $this->orders = new OrderRepository();
+        $this->email = new EmailService();
+        $this->notifications = new NotificationService();
     }
 
     /**
@@ -233,6 +237,17 @@ final class OrderService
                         "Stock just ran out for {$line['product_name']} — please adjust the quantity and try again."
                     );
                 }
+
+                // Check for low stock after decrement (threshold: 5 units)
+                $remainingStock = (int) $rows[$line['variant_id']]['stock_quantity'] - $line['quantity'];
+                if ($remainingStock > 0 && $remainingStock <= 5) {
+                    $this->notifications->notifyLowStock(
+                        $line['product_name'],
+                        (string) $rows[$line['variant_id']]['size'],
+                        (string) $rows[$line['variant_id']]['color'],
+                        $remainingStock
+                    );
+                }
             }
 
             $pdo->commit();
@@ -243,7 +258,15 @@ final class OrderService
             throw $e;
         }
 
-        return $this->getOrder($orderId);
+        $order = $this->getOrder($orderId);
+
+        // Send order confirmation email (best-effort, never fails the order)
+        $this->sendOrderConfirmationEmail($order, $customerName);
+
+        // Send admin notification for new order
+        $this->notifications->notifyNewOrder($order->toArray());
+
+        return $order;
     }
 
     /**
@@ -271,6 +294,8 @@ final class OrderService
      * Order::PAYMENT_STATUSES by the controller — the repository only writes
      * whitelisted columns, so arbitrary strings never reach the ENUM columns.
      *
+     * Sends shipping status email when order status changes.
+     *
      * @param int   $id     Order id to update.
      * @param array $fields Subset of: status, payment_status.
      *
@@ -281,7 +306,28 @@ final class OrderService
     {
         $this->orders->updateStatus($id, $fields);
 
-        return $this->getOrder($id);
+        $order = $this->getOrder($id);
+
+        // Send shipping status email if order status changed
+        if ($order !== null && isset($fields['status'])) {
+            // Get customer name and email for notification
+            $customerName = $order->customer_name;
+            $email = null;
+
+            if ($order->user_id !== null) {
+                $userRepo = new \App\Repositories\UserRepository();
+                $user = $userRepo->findById($order->user_id);
+                if ($user !== null) {
+                    $email = $user->email;
+                }
+            }
+
+            if ($email !== null) {
+                $this->sendShippingStatusEmail($order, $customerName, $email);
+            }
+        }
+
+        return $order;
     }
 
     /**
@@ -336,5 +382,71 @@ final class OrderService
     private static function pricesDiffer(string $authoritative, string $client): bool
     {
         return abs(((float) $authoritative) - ((float) $client)) > 0.004;
+    }
+
+    /**
+     * Sends order confirmation email (best-effort, never fails the order).
+     *
+     * @param Order  $order        The order object with items.
+     * @param string $customerName Customer name for email.
+     */
+    private function sendOrderConfirmationEmail(Order $order, string $customerName): void
+    {
+        // Extract email from order or user
+        $email = null;
+
+        // Try to get email from user if order is attributed
+        if ($order->user_id !== null) {
+            $userRepo = new \App\Repositories\UserRepository();
+            $user = $userRepo->findById($order->user_id);
+            if ($user !== null) {
+                $email = $user->email;
+            }
+        }
+
+        // If no email available, skip silently (guest checkout without email)
+        if ($email === null || $email === '') {
+            return;
+        }
+
+        try {
+            $this->email->sendOrderConfirmation($email, $customerName, $order->toArray());
+        } catch (\RuntimeException $e) {
+            // Log failure but don't throw — order placement already succeeded
+            error_log(sprintf(
+                '[Email] Failed to send order confirmation for order #%d: %s',
+                $order->id,
+                $e->getMessage()
+            ));
+        }
+    }
+
+    /**
+     * Sends shipping status update email (best-effort).
+     *
+     * @param Order  $order        The order object.
+     * @param string $customerName Customer name.
+     * @param string $email        Customer email.
+     */
+    private function sendShippingStatusEmail(Order $order, string $customerName, string $email): void
+    {
+        if ($email === '') {
+            return;
+        }
+
+        // Only send for meaningful status changes
+        if (!in_array($order->status, ['processing', 'shipped', 'delivered'], true)) {
+            return;
+        }
+
+        try {
+            $this->email->sendShippingStatusUpdate($email, $customerName, $order->toArray());
+        } catch (\RuntimeException $e) {
+            error_log(sprintf(
+                '[Email] Failed to send shipping status for order #%d: %s',
+                $order->id,
+                $e->getMessage()
+            ));
+        }
     }
 }
