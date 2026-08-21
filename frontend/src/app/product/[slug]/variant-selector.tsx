@@ -100,7 +100,7 @@ export default function VariantSelector({
   }
 
   const chip =
-    "rounded-md border px-3 py-2 text-sm transition-colors focus:outline-none";
+    "min-h-10 rounded-md border px-3 py-2 text-sm transition-colors focus:outline-none";
   const chipEnabled =
     "border-neutral-300 hover:border-neutral-900 cursor-pointer";
   const chipDisabled = "border-neutral-200 text-neutral-300 cursor-not-allowed";
