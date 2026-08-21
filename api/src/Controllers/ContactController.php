@@ -12,8 +12,8 @@ use App\Repositories\ContactMessageRepository;
  * Validates name/email/message server-side (required, email, min lengths),
  * then stores the message in contact_messages (is_read = 0) via
  * App\Repositories\ContactMessageRepository. Prepared statements protect
- * against injection; the security phase adds rate limiting + a honeypot /
- * captcha against spam bots (spec roadmap).
+ * against injection. Rate limiting (RateLimitMiddleware) prevents spam floods.
+ * Honeypot field (website) catches bots — real users never fill it.
  */
 final class ContactController extends Controller
 {
@@ -29,13 +29,26 @@ final class ContactController extends Controller
     /**
      * POST /api/contact — store a contact message.
      *
-     * @return never 201 with {data: {id}}, or 422 on validation errors.
+     * Honeypot: rejects submissions where the 'website' field is non-empty
+     * (bots fill hidden fields; humans never see it). Returns 422 like
+     * validation failures to avoid revealing the honeypot.
+     *
+     * @return never 201 with {data: {id}}, or 422 on validation/bot detection.
      */
     public function store(Request $request): never
     {
         $name    = trim((string) $request->input('name', ''));
         $email   = trim((string) $request->input('email', ''));
         $message = trim((string) $request->input('message', ''));
+        $website = trim((string) $request->input('website', ''));
+
+        // Honeypot check — if the 'website' field is filled, it's a bot
+        if ($website !== '') {
+            // Return 422 like a validation error to avoid revealing the trap
+            $this->error('Validation failed.', 422, ['errors' => [
+                'message' => ['Message could not be submitted. Please try again.'],
+            ]]);
+        }
 
         $errors = Validator::validate(
             ['name' => $name, 'email' => $email, 'message' => $message],
