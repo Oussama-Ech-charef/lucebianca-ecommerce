@@ -21,6 +21,7 @@ use App\Core\Request;
 use App\Core\Router;
 use App\Controllers\AccountController;
 use App\Controllers\Admin\AuthController as AdminAuthController;
+use App\Controllers\Admin\CategoriesController;
 use App\Controllers\Admin\CustomersController;
 use App\Controllers\Admin\DashboardController;
 use App\Controllers\Admin\OrdersController;
@@ -107,5 +108,11 @@ $router->get('/api/admin/dashboard-stats', [DashboardController::class, 'show'],
 // Customers
 $router->get('/api/admin/customers', [CustomersController::class, 'index'], $adminMiddleware);
 $router->get('/api/admin/customers/{id}', [CustomersController::class, 'show'], $adminMiddleware);
+
+// Categories
+$router->get('/api/admin/categories', [CategoriesController::class, 'index'], $adminMiddleware);
+$router->post('/api/admin/categories', [CategoriesController::class, 'store'], $adminCsrf);
+$router->put('/api/admin/categories/{id}', [CategoriesController::class, 'update'], $adminCsrf);
+$router->delete('/api/admin/categories/{id}', [CategoriesController::class, 'destroy'], $adminCsrf);
 
 $router->dispatch(Request::fromGlobals());
