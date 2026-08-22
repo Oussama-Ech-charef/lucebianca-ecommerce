@@ -35,6 +35,7 @@ use App\Controllers\CategoryController;
 use App\Controllers\ContactController;
 use App\Controllers\CsrfController;
 use App\Controllers\HealthController;
+use App\Controllers\NewsletterController;
 use App\Controllers\OrderController;
 use App\Controllers\PaymentController;
 use App\Controllers\ProductController;
@@ -70,6 +71,10 @@ $router->post('/api/products/{slug}/reviews', [ReviewController::class, 'store']
 $router->get('/api/wishlist', [WishlistController::class, 'index']);
 $router->post('/api/wishlist', [WishlistController::class, 'store'], [$csrfProtection]);
 $router->delete('/api/wishlist/{productId}', [WishlistController::class, 'destroy'], [$csrfProtection]);
+
+// --- Newsletter (public) ---
+$router->post('/api/newsletter/subscribe', [NewsletterController::class, 'subscribe'], [$csrfProtection, $contactRateLimit]);
+$router->post('/api/newsletter/unsubscribe', [NewsletterController::class, 'unsubscribe']);
 
 // --- Cart + checkout (CSRF protected for state-changing operations) ---
 $router->post('/api/cart', [CartController::class, 'store'], [$csrfProtection]);
