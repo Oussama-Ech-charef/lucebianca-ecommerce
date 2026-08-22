@@ -21,6 +21,7 @@ use App\Core\Request;
 use App\Core\Router;
 use App\Controllers\AccountController;
 use App\Controllers\Admin\AuthController as AdminAuthController;
+use App\Controllers\Admin\CustomersController;
 use App\Controllers\Admin\DashboardController;
 use App\Controllers\Admin\OrdersController;
 use App\Controllers\Admin\ProductsController;
@@ -102,5 +103,9 @@ $router->post('/api/admin/products/{id}/images', [ProductsController::class, 'up
 $router->get('/api/admin/orders', [OrdersController::class, 'index'], $adminMiddleware);
 $router->put('/api/admin/orders/{id}', [OrdersController::class, 'update'], $adminCsrf);
 $router->get('/api/admin/dashboard-stats', [DashboardController::class, 'show'], $adminMiddleware);
+
+// Customers
+$router->get('/api/admin/customers', [CustomersController::class, 'index'], $adminMiddleware);
+$router->get('/api/admin/customers/{id}', [CustomersController::class, 'show'], $adminMiddleware);
 
 $router->dispatch(Request::fromGlobals());
