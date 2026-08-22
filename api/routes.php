@@ -39,6 +39,7 @@ use App\Controllers\OrderController;
 use App\Controllers\PaymentController;
 use App\Controllers\ProductController;
 use App\Controllers\ReviewController;
+use App\Controllers\WishlistController;
 
 $router = new Router();
 
@@ -64,6 +65,11 @@ $router->get('/api/categories', [CategoryController::class, 'index']);
 
 // --- Reviews (public submission requires auth) ---
 $router->post('/api/products/{slug}/reviews', [ReviewController::class, 'store'], [$csrfProtection]);
+
+// --- Wishlist (authenticated customers only) ---
+$router->get('/api/wishlist', [WishlistController::class, 'index']);
+$router->post('/api/wishlist', [WishlistController::class, 'store'], [$csrfProtection]);
+$router->delete('/api/wishlist/{productId}', [WishlistController::class, 'destroy'], [$csrfProtection]);
 
 // --- Cart + checkout (CSRF protected for state-changing operations) ---
 $router->post('/api/cart', [CartController::class, 'store'], [$csrfProtection]);
