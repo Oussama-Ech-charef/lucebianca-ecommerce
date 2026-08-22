@@ -24,6 +24,7 @@ use App\Controllers\Admin\AuthController as AdminAuthController;
 use App\Controllers\Admin\CategoriesController;
 use App\Controllers\Admin\CustomersController;
 use App\Controllers\Admin\DashboardController;
+use App\Controllers\Admin\MessagesController;
 use App\Controllers\Admin\OrdersController;
 use App\Controllers\Admin\ProductsController;
 use App\Controllers\Admin\ReviewsController;
@@ -125,5 +126,10 @@ $router->get('/api/admin/reviews', [ReviewsController::class, 'index'], $adminMi
 $router->put('/api/admin/reviews/{id}/approve', [ReviewsController::class, 'approve'], $adminCsrf);
 $router->put('/api/admin/reviews/{id}/reject', [ReviewsController::class, 'reject'], $adminCsrf);
 $router->delete('/api/admin/reviews/{id}', [ReviewsController::class, 'destroy'], $adminCsrf);
+
+// Contact Messages
+$router->get('/api/admin/messages', [MessagesController::class, 'index'], $adminMiddleware);
+$router->put('/api/admin/messages/{id}/mark-read', [MessagesController::class, 'markRead'], $adminCsrf);
+$router->delete('/api/admin/messages/{id}', [MessagesController::class, 'destroy'], $adminCsrf);
 
 $router->dispatch(Request::fromGlobals());
