@@ -26,6 +26,7 @@ use App\Controllers\Admin\CustomersController;
 use App\Controllers\Admin\DashboardController;
 use App\Controllers\Admin\OrdersController;
 use App\Controllers\Admin\ProductsController;
+use App\Controllers\Admin\ReviewsController;
 use App\Controllers\AuthController;
 use App\Controllers\CartController;
 use App\Controllers\CategoryController;
@@ -35,6 +36,7 @@ use App\Controllers\HealthController;
 use App\Controllers\OrderController;
 use App\Controllers\PaymentController;
 use App\Controllers\ProductController;
+use App\Controllers\ReviewController;
 
 $router = new Router();
 
@@ -57,6 +59,9 @@ $router->get('/api/csrf-token', [CsrfController::class, 'show']);
 $router->get('/api/products', [ProductController::class, 'index']);
 $router->get('/api/products/{slug}', [ProductController::class, 'show']);
 $router->get('/api/categories', [CategoryController::class, 'index']);
+
+// --- Reviews (public submission requires auth) ---
+$router->post('/api/products/{slug}/reviews', [ReviewController::class, 'store'], [$csrfProtection]);
 
 // --- Cart + checkout (CSRF protected for state-changing operations) ---
 $router->post('/api/cart', [CartController::class, 'store'], [$csrfProtection]);
@@ -114,5 +119,11 @@ $router->get('/api/admin/categories', [CategoriesController::class, 'index'], $a
 $router->post('/api/admin/categories', [CategoriesController::class, 'store'], $adminCsrf);
 $router->put('/api/admin/categories/{id}', [CategoriesController::class, 'update'], $adminCsrf);
 $router->delete('/api/admin/categories/{id}', [CategoriesController::class, 'destroy'], $adminCsrf);
+
+// Reviews
+$router->get('/api/admin/reviews', [ReviewsController::class, 'index'], $adminMiddleware);
+$router->put('/api/admin/reviews/{id}/approve', [ReviewsController::class, 'approve'], $adminCsrf);
+$router->put('/api/admin/reviews/{id}/reject', [ReviewsController::class, 'reject'], $adminCsrf);
+$router->delete('/api/admin/reviews/{id}', [ReviewsController::class, 'destroy'], $adminCsrf);
 
 $router->dispatch(Request::fromGlobals());

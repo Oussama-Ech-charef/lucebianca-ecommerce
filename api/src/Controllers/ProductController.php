@@ -8,6 +8,7 @@ use App\Models\Variant;
 use App\Repositories\ProductImageRepository;
 use App\Repositories\ProductRepository;
 use App\Repositories\ProductVariantRepository;
+use App\Repositories\ReviewRepository;
 
 /**
  * ProductController — public storefront product endpoints.
@@ -24,12 +25,14 @@ final class ProductController extends Controller
     private ProductRepository $products;
     private ProductVariantRepository $variants;
     private ProductImageRepository $images;
+    private ReviewRepository $reviews;
 
     public function __construct()
     {
         $this->products = new ProductRepository();
         $this->variants = new ProductVariantRepository();
         $this->images   = new ProductImageRepository();
+        $this->reviews  = new ReviewRepository();
     }
 
     /**
@@ -100,6 +103,8 @@ final class ProductController extends Controller
                     $this->variants->listByProduct($product->id)
                 ),
                 'images'   => $this->images->listByProduct($product->id),
+                'reviews'  => $this->reviews->getApprovedByProduct($product->id),
+                'average_rating' => $this->reviews->getAverageRating($product->id),
             ],
         ]);
     }
