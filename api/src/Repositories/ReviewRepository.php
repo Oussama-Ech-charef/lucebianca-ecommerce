@@ -15,7 +15,7 @@ final class ReviewRepository extends Repository
      */
     public function create(int $productId, ?int $userId, int $rating, ?string $comment): int
     {
-        $stmt = $this->pdo()->prepare("
+        $stmt = $this->db->prepare("
             INSERT INTO reviews (product_id, user_id, rating, comment)
             VALUES (:product_id, :user_id, :rating, :comment)
         ");
@@ -25,7 +25,7 @@ final class ReviewRepository extends Repository
         $stmt->bindValue(':comment', $comment, $comment === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
         $stmt->execute();
 
-        return (int) $this->pdo()->lastInsertId();
+        return (int) $this->db->lastInsertId();
     }
 
     /**
@@ -33,7 +33,7 @@ final class ReviewRepository extends Repository
      */
     public function getApprovedByProduct(int $productId): array
     {
-        $stmt = $this->pdo()->prepare("
+        $stmt = $this->db->prepare("
             SELECT r.id, r.rating, r.comment, r.created_at,
                    u.name as user_name
             FROM reviews r
@@ -52,7 +52,7 @@ final class ReviewRepository extends Repository
      */
     public function getAverageRating(int $productId): ?float
     {
-        $stmt = $this->pdo()->prepare("
+        $stmt = $this->db->prepare("
             SELECT AVG(rating) as avg_rating
             FROM reviews
             WHERE product_id = :product_id AND is_approved = 1
@@ -78,7 +78,7 @@ final class ReviewRepository extends Repository
 
         // Count total
         $countSql = "SELECT COUNT(*) FROM reviews r $whereClause";
-        $stmt = $this->pdo()->prepare($countSql);
+        $stmt = $this->db->prepare($countSql);
         if ($approvalStatus !== null) {
             $stmt->bindValue(':is_approved', $approvalStatus, PDO::PARAM_INT);
         }
@@ -98,7 +98,7 @@ final class ReviewRepository extends Repository
             ORDER BY r.created_at DESC
             LIMIT :limit OFFSET :offset
         ";
-        $stmt = $this->pdo()->prepare($sql);
+        $stmt = $this->db->prepare($sql);
         if ($approvalStatus !== null) {
             $stmt->bindValue(':is_approved', $approvalStatus, PDO::PARAM_INT);
         }
@@ -117,7 +117,7 @@ final class ReviewRepository extends Repository
      */
     public function updateApproval(int $id, int $isApproved): void
     {
-        $stmt = $this->pdo()->prepare("
+        $stmt = $this->db->prepare("
             UPDATE reviews
             SET is_approved = :is_approved
             WHERE id = :id
@@ -132,7 +132,7 @@ final class ReviewRepository extends Repository
      */
     public function delete(int $id): void
     {
-        $stmt = $this->pdo()->prepare("DELETE FROM reviews WHERE id = :id");
+        $stmt = $this->db->prepare("DELETE FROM reviews WHERE id = :id");
         $stmt->bindValue(':id', $id, PDO::PARAM_INT);
         $stmt->execute();
     }

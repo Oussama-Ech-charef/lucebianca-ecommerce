@@ -28,6 +28,7 @@ use App\Controllers\Admin\MessagesController;
 use App\Controllers\Admin\OrdersController;
 use App\Controllers\Admin\ProductsController;
 use App\Controllers\Admin\ReviewsController;
+use App\Controllers\Admin\SettingsController;
 use App\Controllers\AuthController;
 use App\Controllers\CartController;
 use App\Controllers\CategoryController;
@@ -131,5 +132,9 @@ $router->delete('/api/admin/reviews/{id}', [ReviewsController::class, 'destroy']
 $router->get('/api/admin/messages', [MessagesController::class, 'index'], $adminMiddleware);
 $router->put('/api/admin/messages/{id}/mark-read', [MessagesController::class, 'markRead'], $adminCsrf);
 $router->delete('/api/admin/messages/{id}', [MessagesController::class, 'destroy'], $adminCsrf);
+
+// Settings
+$router->get('/api/admin/settings', [SettingsController::class, 'index'], $adminMiddleware);
+$router->put('/api/admin/settings', [SettingsController::class, 'update'], $adminCsrf);
 
 $router->dispatch(Request::fromGlobals());

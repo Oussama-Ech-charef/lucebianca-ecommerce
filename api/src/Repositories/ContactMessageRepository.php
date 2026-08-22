@@ -44,7 +44,7 @@ final class ContactMessageRepository extends Repository
 
         // Count total
         $countSql = "SELECT COUNT(*) FROM contact_messages $whereClause";
-        $stmt = $this->pdo()->prepare($countSql);
+        $stmt = $this->db->prepare($countSql);
         if ($isRead !== null) {
             $stmt->bindValue(':is_read', $isRead, \PDO::PARAM_INT);
         }
@@ -59,7 +59,7 @@ final class ContactMessageRepository extends Repository
             ORDER BY created_at DESC
             LIMIT :limit OFFSET :offset
         ";
-        $stmt = $this->pdo()->prepare($sql);
+        $stmt = $this->db->prepare($sql);
         if ($isRead !== null) {
             $stmt->bindValue(':is_read', $isRead, \PDO::PARAM_INT);
         }
@@ -78,7 +78,7 @@ final class ContactMessageRepository extends Repository
      */
     public function markAsRead(int $id): void
     {
-        $stmt = $this->pdo()->prepare("
+        $stmt = $this->db->prepare("
             UPDATE contact_messages
             SET is_read = 1
             WHERE id = :id
@@ -92,7 +92,7 @@ final class ContactMessageRepository extends Repository
      */
     public function delete(int $id): void
     {
-        $stmt = $this->pdo()->prepare("DELETE FROM contact_messages WHERE id = :id");
+        $stmt = $this->db->prepare("DELETE FROM contact_messages WHERE id = :id");
         $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
         $stmt->execute();
     }
