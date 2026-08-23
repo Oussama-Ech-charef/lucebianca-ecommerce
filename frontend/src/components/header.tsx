@@ -8,9 +8,12 @@ import { useCart } from "@/lib/cart-context";
 import { useCustomerSession } from "@/lib/customer-auth";
 import { formatPrice } from "@/lib/storefront";
 
-// Only /shop exists as a route. About/Contact links are deliberately omitted
-// until their pages are built (phase roadmap), rather than linking to 404s.
-const NAV_LINKS = [{ label: "Shop", href: "/shop" }];
+// Storefront routes. /wishlist requires a customer session — signed-out
+// visitors get a sign-in prompt on that page rather than a hidden link.
+const NAV_LINKS = [
+  { label: "Shop", href: "/shop" },
+  { label: "Wishlist", href: "/wishlist" },
+];
 
 export default function Header() {
   const [mobileOpen, setMobileOpen] = useState(false);

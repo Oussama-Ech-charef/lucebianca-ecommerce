@@ -54,3 +54,13 @@ export async function api<T>(
 
   return data as T;
 }
+
+/**
+ * GET /api/csrf-token — a fresh CSRF token for state-changing requests.
+ * CsrfMiddleware (api/src/Core/CsrfMiddleware.php) validates it from the
+ * `X-CSRF-Token` header on every POST/PUT/DELETE route it guards.
+ */
+export async function fetchCsrfToken(): Promise<string> {
+  const data = await api<{ csrf_token: string }>("/api/csrf-token");
+  return data.csrf_token;
+}

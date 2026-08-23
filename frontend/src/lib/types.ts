@@ -53,6 +53,14 @@ export type ShopProduct = Product & {
 export type ProductDetail = Product & {
   variants: Variant[];
   images: ProductImage[];
+  reviews: Array<{
+    id: number;
+    rating: number;
+    comment: string | null;
+    created_at: string;
+    user_name: string | null;
+  }>;
+  average_rating: number | null;
 };
 
 export type Paginated<T> = {
@@ -149,6 +157,26 @@ export type CustomerOrder = {
   payment_status: PaymentStatus;
   created_at: string;
   item_count: number;
+};
+
+/**
+ * A row in GET /api/wishlist — a saved product summary for the customer
+ * (mirrors WishlistRepository::getByUser; no image data is included).
+ */
+export type WishlistItem = {
+  id: number;
+  product_id: number;
+  created_at: string;
+  name: string;
+  slug: string;
+  base_price: string;
+  is_active: number;
+};
+
+/** Payload of POST /api/wishlist (`added` false = was already saved). */
+export type WishlistMutation = {
+  added: boolean;
+  message: string;
 };
 
 /** A line of an order — GET /api/orders/{id} and POST /api/orders. */

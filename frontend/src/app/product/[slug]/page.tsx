@@ -13,6 +13,8 @@ import {
 import type { ProductDetail } from "@/lib/types";
 import Gallery from "./gallery";
 import VariantSelector from "./variant-selector";
+import WishlistButton from "./wishlist-button";
+import ProductReviews from "./reviews";
 
 type PageProps = { params: Promise<{ slug: string }> };
 
@@ -213,6 +215,8 @@ export default async function ProductPage({ params }: PageProps) {
             />
           </div>
 
+          <WishlistButton productId={product.id} productName={product.name} />
+
           {product.description ? (
             <div className="mt-8 border-t border-neutral-200 pt-6">
               <h2 className="font-serif text-lg">About this product</h2>
@@ -230,6 +234,10 @@ export default async function ProductPage({ params }: PageProps) {
           ) : null}
         </div>
       </div>
+
+      {/* Customer Reviews — always rendered (shows the write-review form
+          and an empty state for products with no approved reviews yet) */}
+      <ProductReviews product={product} />
     </main>
   );
 }
