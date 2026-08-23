@@ -32,7 +32,13 @@ final class RateLimiter
         $this->key = $key;
         $this->maxAttempts = $maxAttempts;
         $this->windowSeconds = $windowSeconds;
-        $this->storageDir = __DIR__ . '/../../storage/rate-limits';
+
+        // Optional override (used by the test suite for isolated buckets);
+        // defaults to the shared runtime directory.
+        $configured = Env::get('RATE_LIMIT_STORAGE_DIR', '');
+        $this->storageDir = is_string($configured) && $configured !== ''
+            ? $configured
+            : __DIR__ . '/../../storage/rate-limits';
 
         if (!is_dir($this->storageDir)) {
             mkdir($this->storageDir, 0755, true);
