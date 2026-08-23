@@ -13,40 +13,40 @@ export default function SettingsClient() {
   const [activeTab, setActiveTab] = useState<"store" | "shipping" | "payments" | "notifications">("store");
 
   useEffect(() => {
+    async function fetchSettings() {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const token = localStorage.getItem("lucebianca:admin:session:v1");
+        if (!token) {
+          setError("Not authenticated");
+          setLoading(false);
+          return;
+        }
+
+        const response = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/admin/settings`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch settings");
+        }
+
+        const result = await response.json();
+        setSettings(result.data || {});
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load settings");
+      } finally {
+        setLoading(false);
+      }
+    }
+
     fetchSettings();
   }, []);
-
-  async function fetchSettings() {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const token = localStorage.getItem("lucebianca:admin:session:v1");
-      if (!token) {
-        setError("Not authenticated");
-        setLoading(false);
-        return;
-      }
-
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/settings`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch settings");
-      }
-
-      const result = await response.json();
-      setSettings(result.data || {});
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load settings");
-    } finally {
-      setLoading(false);
-    }
-  }
 
   function updateSetting(key: string, value: string) {
     setSettings((prev) => ({ ...prev, [key]: value }));

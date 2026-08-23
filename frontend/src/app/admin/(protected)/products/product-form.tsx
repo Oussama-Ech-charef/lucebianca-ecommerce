@@ -4,12 +4,18 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
+import type { Product } from "@/lib/types";
+
 type Variant = {
   size: string;
   color: string;
   sku: string;
   price: string;
   stock_quantity: number;
+};
+
+type AdminProductsResponse = {
+  data: Product[];
 };
 
 type ProductFormProps = {
@@ -35,42 +41,44 @@ export default function ProductForm({ productId }: ProductFormProps) {
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (isEdit) {
-      fetchProduct();
+    if (productId === undefined) {
+      return;
     }
-  }, [productId]);
 
-  async function fetchProduct() {
-    const token = localStorage.getItem("lucebianca:admin:session:v1");
-    if (!token) return;
+    async function fetchProduct() {
+      const token = localStorage.getItem("lucebianca:admin:session:v1");
+      if (!token) return;
 
-    try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/products?page=1&per_page=100`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
+      try {
+        const response = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/admin/products?page=1&per_page=100`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+
+        if (response.ok) {
+          const result: AdminProductsResponse = await response.json();
+          const product = result.data.find((p) => p.id === productId);
+
+          if (product) {
+            setName(product.name || "");
+            setSlug(product.slug || "");
+            setDescription(product.description || "");
+            setBasePrice(product.base_price || "");
+            setCategoryId(product.category_id?.toString() || "");
+            setIsActive(product.is_active === 1);
+            setMetaTitle(product.meta_title || "");
+            setMetaDescription(product.meta_description || "");
+          }
         }
-      );
-
-      if (response.ok) {
-        const result = await response.json();
-        const product = result.data.find((p: any) => p.id === productId);
-
-        if (product) {
-          setName(product.name || "");
-          setSlug(product.slug || "");
-          setDescription(product.description || "");
-          setBasePrice(product.base_price || "");
-          setCategoryId(product.category_id?.toString() || "");
-          setIsActive(product.is_active === 1);
-          setMetaTitle(product.meta_title || "");
-          setMetaDescription(product.meta_description || "");
-        }
+      } catch (err) {
+        console.error("Failed to fetch product", err);
       }
-    } catch (err) {
-      console.error("Failed to fetch product", err);
     }
-  }
+
+    fetchProduct();
+  }, [productId]);
 
   function addVariant() {
     setVariants([
@@ -102,7 +110,17 @@ export default function ProductForm({ productId }: ProductFormProps) {
       return;
     }
 
-    const payload: any = {
+    const payload: {
+      name: string;
+      slug?: string;
+      description: string | null;
+      base_price: string;
+      category_id: string | null;
+      is_active: 0 | 1;
+      meta_title: string;
+      meta_description: string;
+      variants?: Variant[];
+    } = {
       name,
       slug: slug || undefined,
       description: description || null,

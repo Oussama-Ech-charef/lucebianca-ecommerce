@@ -29,43 +29,43 @@ export default function CustomersClient() {
   const [meta, setMeta] = useState<CustomersResponse["meta"] | null>(null);
 
   useEffect(() => {
+    async function fetchCustomers(pageNum: number) {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const token = localStorage.getItem("lucebianca:admin:session:v1");
+        if (!token) {
+          setError("Not authenticated");
+          setLoading(false);
+          return;
+        }
+
+        const response = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/admin/customers?page=${pageNum}&per_page=20`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch customers");
+        }
+
+        const result: CustomersResponse = await response.json();
+        setCustomers(result.data);
+        setMeta(result.meta);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load customers");
+      } finally {
+        setLoading(false);
+      }
+    }
+
     fetchCustomers(page);
   }, [page]);
-
-  async function fetchCustomers(pageNum: number) {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const token = localStorage.getItem("lucebianca:admin:session:v1");
-      if (!token) {
-        setError("Not authenticated");
-        setLoading(false);
-        return;
-      }
-
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/customers?page=${pageNum}&per_page=20`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch customers");
-      }
-
-      const result: CustomersResponse = await response.json();
-      setCustomers(result.data);
-      setMeta(result.meta);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load customers");
-    } finally {
-      setLoading(false);
-    }
-  }
 
   if (loading) {
     return (
