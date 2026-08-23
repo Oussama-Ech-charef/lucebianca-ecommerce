@@ -10,6 +10,8 @@
 declare(strict_types=1);
 
 use App\Core\Env;
+use App\Core\ErrorLogger;
+use App\Core\Request;
 use App\Core\Response;
 
 require __DIR__ . '/src/autoload.php';
@@ -21,6 +23,20 @@ date_default_timezone_set((string) Env::get('APP_TIMEZONE', 'Africa/Casablanca')
 // --- Error handling: PHP errors become JSON 500s (JSON 400 on bad JSON body) ---
 set_exception_handler(static function (Throwable $e): void {
     $debug = Env::get('APP_DEBUG', false);
+
+    // Structured server-side log of every uncaught throwable — one JSON line
+    // in api/storage/logs/app-error.log (gitignored). Inputs are never
+    // logged; see ErrorLogger for the recorded fields.
+    try {
+        $request = Request::fromGlobals();
+    } catch (Throwable) {
+        $request = null; // Super unavailable — log without request context.
+    }
+    $requestId = ErrorLogger::logThrowable($e, $request);
+
+    // Correlation header: what the client sees matches one log line.
+    header('X-Request-Id: ' . $requestId);
+
     $payload = ['error' => $debug ? $e->getMessage() : 'Internal server error.'];
 
     if ($debug) {
