@@ -20,7 +20,7 @@ final class OrderRepository extends Repository
      *
      * @param array{
      *   total_amount: string, shipping_address: string,
-     *   customer_name: string, phone: string, payment_method: string
+     *   customer_name: string, phone: string, email: string, payment_method: string
      * } $data Order columns.
      * @param int|null $userId Optional authenticated customer id — NULL for
      *                         guest checkout (orders.user_id is nullable).
@@ -31,16 +31,18 @@ final class OrderRepository extends Repository
     {
         $stmt = $this->db->prepare(
             'INSERT INTO orders
-               (user_id, status, total_amount, shipping_address, customer_name, phone, payment_method, payment_status)
+               (user_id, status, total_amount, shipping_address, customer_name, phone, email, payment_method, payment_status)
              VALUES
-               (:user_id, \'pending\', :total_amount, :shipping_address, :customer_name, :phone, :payment_method, \'pending\')'
+               (:user_id, \'pending\', :total_amount, :shipping_address, :customer_name, :phone, :email, :payment_method, :payment_status)'
         );
         $stmt->bindValue(':user_id', $userId, \PDO::PARAM_INT);
         $stmt->bindValue(':total_amount', $data['total_amount']);
         $stmt->bindValue(':shipping_address', $data['shipping_address']);
         $stmt->bindValue(':customer_name', $data['customer_name']);
         $stmt->bindValue(':phone', $data['phone']);
+        $stmt->bindValue(':email', $data['email']);
         $stmt->bindValue(':payment_method', $data['payment_method']);
+        $stmt->bindValue(':payment_status', $data['payment_method'] === 'card' ? 'pending' : 'paid');
         $stmt->execute();
 
         return (int) $this->db->lastInsertId();

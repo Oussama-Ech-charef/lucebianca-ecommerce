@@ -35,7 +35,7 @@ final class OrderController extends Controller
     /**
      * POST /api/orders — place an order (COD / WhatsApp / Card).
      *
-     * Body: {"customer_name": "...", "phone": "...", "shipping_address": "...",
+     * Body: {"customer_name": "...", "phone": "...", "email": "...", "shipping_address": "...",
      *        "payment_method": "cod"|"whatsapp"|"card",
      *        "items": [{"variant_id": 6, "quantity": 2}]}
      *
@@ -51,6 +51,7 @@ final class OrderController extends Controller
             $order = $this->orders->placeOrder(
                 trim((string) $request->input('customer_name', '')),
                 trim((string) $request->input('phone', '')),
+                trim((string) $request->input('email', '')),
                 trim((string) $request->input('shipping_address', '')),
                 (string) $request->input('payment_method', ''),
                 is_array($request->input('items')) ? $request->input('items') : [],

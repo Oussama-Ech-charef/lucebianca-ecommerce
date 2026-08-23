@@ -64,8 +64,13 @@ final class ProductController extends Controller
             return $this->products->paginate($page, $perPage, $filters, true);
         }, 300);
 
-        $productIds = array_column($result['items'], 'id');
-        $imagesByProduct = $this->images->groupByProducts($productIds);
+        // One query for every image on the page, grouped by product id.
+        $imagesByProduct = [];
+        foreach ($this->images->allForProducts(
+            array_map(static fn (Product $p): int => $p->id, $result['items'])
+        ) as $row) {
+            $imagesByProduct[$row['product_id']][] = $row;
+        }
 
         $items = array_map(
             static fn (Product $product): array => [

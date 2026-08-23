@@ -24,6 +24,7 @@ final class Order
         public string $shippingAddress,
         public string $customerName,
         public string $phone,
+        public ?string $email,
         public string $paymentMethod,
         public string $paymentStatus,
         public string $createdAt,
@@ -44,6 +45,7 @@ final class Order
             (string) $row['shipping_address'],
             (string) $row['customer_name'],
             (string) $row['phone'],
+            $row['email'] ?? null,
             (string) $row['payment_method'],
             (string) $row['payment_status'],
             (string) $row['created_at']
@@ -63,6 +65,7 @@ final class Order
             'shipping_address' => $this->shippingAddress,
             'customer_name'    => $this->customerName,
             'phone'            => $this->phone,
+            'email'            => $this->email,
             'payment_method'   => $this->paymentMethod,
             'payment_status'   => $this->paymentStatus,
             'created_at'       => $this->createdAt,

@@ -53,6 +53,7 @@ export default function CheckoutForm() {
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cod");
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -129,6 +130,9 @@ export default function CheckoutForm() {
     if (!/^[0-9+()\-\s]{8,20}$/.test(phone.trim())) {
       next.phone = "Please enter a valid phone number.";
     }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      next.email = "Please enter a valid email address.";
+    }
     if (address.trim().length < 5) {
       next.address = "Please enter your shipping address.";
     }
@@ -180,6 +184,7 @@ export default function CheckoutForm() {
         {
           customer_name: name.trim(),
           phone: phone.trim(),
+          email: email.trim(),
           shipping_address: address.trim(),
           payment_method: paymentMethod,
           items: items.map((item) => ({
@@ -251,6 +256,23 @@ export default function CheckoutForm() {
                 />
                 {errors.phone ? (
                   <p className="mt-1 text-xs text-red-700">{errors.phone}</p>
+                ) : null}
+              </div>
+              <div>
+                <label htmlFor="checkout-email" className="text-sm text-neutral-700">
+                  Email
+                </label>
+                <input
+                  id="checkout-email"
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="e.g. yasmine@example.com"
+                  className={errors.email ? errorClass : inputClass}
+                />
+                {errors.email ? (
+                  <p className="mt-1 text-xs text-red-700">{errors.email}</p>
                 ) : null}
               </div>
               <div>

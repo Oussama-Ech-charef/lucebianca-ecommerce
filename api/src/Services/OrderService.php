@@ -109,9 +109,8 @@ final class OrderService
     /**
      * Places an order in a single transaction.
      *
-     * 1. Validates customer fields + payment method (only 'cod' and 'whatsapp'
-     *    are accepted this phase — 'card' is rejected clearly, CMI/Payzone
-     *    lands in phase 8).
+     * 1. Validates customer fields + payment method (only 'cod', 'whatsapp', 'card'
+     *    are accepted).
      * 2. Re-checks every line against live stock (409 on insufficiency).
      * 3. In ONE transaction: insert orders, insert order_items with the
      *    server-computed price, and decrement each variant's stock via a
@@ -119,8 +118,9 @@ final class OrderService
      *
      * @param string          $customerName    Customer name.
      * @param string          $phone           Customer phone.
+     * @param string          $email           Customer email (for order confirmation).
      * @param string          $shippingAddress Shipping address.
-     * @param string          $paymentMethod   'cod' | 'whatsapp' (card rejected).
+     * @param string          $paymentMethod   'cod' | 'whatsapp' | 'card'.
      * @param array<int, mixed> $lines         {variant_id, quantity} lines.
      * @param int|null        $userId          Optional authenticated customer id
      *                                         (null = guest checkout) so a
@@ -135,6 +135,7 @@ final class OrderService
     public function placeOrder(
         string $customerName,
         string $phone,
+        string $email,
         string $shippingAddress,
         string $paymentMethod,
         array $lines,
@@ -145,11 +146,13 @@ final class OrderService
             [
                 'customer_name'    => $customerName,
                 'phone'            => $phone,
+                'email'            => $email,
                 'shipping_address' => $shippingAddress,
             ],
             [
                 'customer_name'    => ['required', ['min', 2]],
                 'phone'            => ['required'],
+                'email'            => ['required', 'email'],
                 'shipping_address' => ['required'],
             ]
         );
@@ -217,6 +220,7 @@ final class OrderService
                 'shipping_address' => $shippingAddress,
                 'customer_name'    => $customerName,
                 'phone'            => $phone,
+                'email'            => $email,
                 'payment_method'   => $paymentMethod,
             ], $userId);
 
@@ -392,11 +396,11 @@ final class OrderService
      */
     private function sendOrderConfirmationEmail(Order $order, string $customerName): void
     {
-        // Extract email from order or user
-        $email = null;
+        // Get email from order (now required for all orders)
+        $email = $order->email ?? null;
 
-        // Try to get email from user if order is attributed
-        if ($order->user_id !== null) {
+        // Fallback to user email if order email is missing (backward compatibility)
+        if (($email === null || $email === '') && $order->user_id !== null) {
             $userRepo = new \App\Repositories\UserRepository();
             $user = $userRepo->findById($order->user_id);
             if ($user !== null) {
@@ -404,7 +408,7 @@ final class OrderService
             }
         }
 
-        // If no email available, skip silently (guest checkout without email)
+        // If still no email available, skip silently
         if ($email === null || $email === '') {
             return;
         }

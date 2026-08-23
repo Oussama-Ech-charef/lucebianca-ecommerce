@@ -116,6 +116,7 @@ export function placeOrder(
   payload: {
     customer_name: string;
     phone: string;
+    email: string;
     shipping_address: string;
     payment_method: "cod" | "whatsapp";
     items: { variant_id: number; quantity: number }[];
