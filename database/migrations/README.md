@@ -32,3 +32,10 @@ mysql -u root -p < database/migrations/002_add_refresh_tokens_table.sql
 | `001_initial_schema.sql` | Full initial schema (14 tables) | applied |
 | `002_add_refresh_tokens_table.sql` | `refresh_tokens` (SHA-256 hashed, revocable) | applied (phase 2) |
 | `003_add_admin_refresh_tokens_table.sql` | `admin_refresh_tokens` (admins are a fully separate table — see file for the FK decision) | applied (phase 4) |
+| `004_add_users_google_id.sql` | users.google_id (Google sign-in create-or-link) | applied (phase 13) |
+| `005_add_users_email_verification.sql` | users email verification token/expiry + flag | applied (phase 16) |
+| `006_add_reviews_table.sql` | reviews (moderated product ratings) | applied |
+| `007_add_wishlist_table.sql` | wishlist (per-customer saved products) | applied |
+| `008_add_newsletter_table.sql` | newsletter_subscribers | applied |
+| `009_add_email_to_orders.sql` | orders.email (guest checkout confirmations) | applied |
+| `010_add_newsletter_status_columns.sql` | newsletter_subscribers.is_active/unsubscribed_at — aligns fresh installs with NewsletterRepository (first subscribe failed with "Unknown column 'is_active'"; caught by api/tests) | applied |

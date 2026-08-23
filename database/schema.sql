@@ -215,7 +215,9 @@ CREATE TABLE wishlist (
 CREATE TABLE newsletter_subscribers (
   id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   email         VARCHAR(150) NOT NULL,
+  is_active     TINYINT(1)   NOT NULL DEFAULT 1,  -- 0 after unsubscribe; resubscribe flips back to 1
   subscribed_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  unsubscribed_at DATETIME   NULL,
   UNIQUE KEY uq_newsletter_email (email)
 ) ENGINE=InnoDB;
 

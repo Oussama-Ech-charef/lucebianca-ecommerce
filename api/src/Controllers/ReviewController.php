@@ -4,7 +4,6 @@ namespace App\Controllers;
 
 use App\Core\Auth;
 use App\Core\Request;
-use App\Core\ValidationException;
 use App\Core\Validator;
 use App\Repositories\ProductRepository;
 use App\Repositories\ReviewRepository;
@@ -29,7 +28,7 @@ final class ReviewController extends Controller
     public function store(Request $request, array $params): never
     {
         $slug = $params['slug'] ?? '';
-        $product = $this->products->findBySlug($slug);
+        $product = $this->products->findActiveBySlug($slug);
 
         if ($product === null) {
             $this->error('Product not found.', 404);
@@ -65,7 +64,7 @@ final class ReviewController extends Controller
         }
 
         if ($errors !== []) {
-            throw new ValidationException($errors);
+            $this->error('Validation failed.', 422, ['errors' => $errors]);
         }
 
         $reviewId = $this->reviews->create(

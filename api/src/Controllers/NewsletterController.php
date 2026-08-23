@@ -3,7 +3,6 @@
 namespace App\Controllers;
 
 use App\Core\Request;
-use App\Core\ValidationException;
 use App\Core\Validator;
 use App\Repositories\NewsletterRepository;
 
@@ -34,7 +33,7 @@ final class NewsletterController extends Controller
         );
 
         if ($errors !== []) {
-            throw new ValidationException($errors);
+            $this->error('Validation failed.', 422, ['errors' => $errors]);
         }
 
         $subscribed = $this->newsletter->subscribe($email);
@@ -64,7 +63,7 @@ final class NewsletterController extends Controller
         );
 
         if ($errors !== []) {
-            throw new ValidationException($errors);
+            $this->error('Validation failed.', 422, ['errors' => $errors]);
         }
 
         $unsubscribed = $this->newsletter->unsubscribe($email);
