@@ -35,3 +35,41 @@ body {
   color: var(--foreground);
   font-family: var(--font-inter), Arial, Helvetica, sans-serif;
 }
+
+/* Hero ambient motion (components/hero.tsx) — two restrained, CSS-only
+   loops: the logo watermark drifts almost imperceptibly and a soft neutral
+   light band sweeps across the hero. Long durations (30s+) at ≤8% alpha read
+   as ambient light rather than animation. Both are disabled for users with
+   prefers-reduced-motion via motion-reduce:animate-none in hero.tsx. */
+@theme {
+  --animate-watermark-drift: watermark-drift 44s ease-in-out infinite alternate;
+  --animate-light-sweep: light-sweep 30s ease-in-out infinite alternate;
+
+  @keyframes watermark-drift {
+    from {
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+    to {
+      transform: translate3d(-2%, -2%, 0) scale(1.05);
+    }
+  }
+
+  @keyframes light-sweep {
+    from {
+      transform: translate3d(-18%, -12%, 0);
+    }
+    to {
+      transform: translate3d(14%, 10%, 0);
+    }
+  }
+}
+
+/* The sweeping layer itself — an oversized soft white radial that fades to
+   nothing well inside its own bounds, so no edge ever shows while it moves. */
+.hero-light-sweep {
+  background: radial-gradient(
+    closest-side,
+    rgba(255, 255, 255, 0.08),
+    transparent 72%
+  );
+}

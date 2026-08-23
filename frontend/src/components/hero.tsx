@@ -6,10 +6,11 @@ import { motion, useReducedMotion, useScroll, useTransform } from "framer-motion
 import { useRef } from "react";
 
 /**
- * Hero — spec 3.6. The background media is a static, CSS-composed treatment
- * (no cliché gradients) rendered inside <HeroMedia />, positioned exactly
- * where a <video> element can later slot in (autoplay/muted/loop) without
- * touching the parallax or foreground markup.
+ * Hero — spec 3.6. Background media layers inside <HeroMedia />: dark base,
+ * hairlines, the logo watermark (slow CSS drift), and a soft light sweep.
+ * The ambient motion is CSS-only — keyframes live in app/globals.css
+ * (@theme animations) and stop for prefers-reduced-motion users via
+ * motion-reduce utilities. Parallax and foreground are unchanged.
  */
 export default function Hero() {
   const sectionRef = useRef<HTMLElement>(null);
@@ -99,7 +100,15 @@ function HeroMedia() {
         width={1536}
         height={1024}
         sizes="(min-width: 640px) 72rem, 26rem"
-        className="pointer-events-none absolute -bottom-24 -right-20 h-80 w-[26rem] select-none object-cover opacity-15 sm:-bottom-48 sm:-right-24 sm:h-[48rem] sm:w-[72rem]"
+        className="pointer-events-none absolute -bottom-24 -right-20 h-80 w-[26rem] select-none object-cover opacity-15 motion-reduce:animate-none animate-watermark-drift sm:-bottom-48 sm:-right-24 sm:h-[48rem] sm:w-[72rem]"
+      />
+
+      {/* Ambient light — an oversized, barely-there white radial drifting
+          across the hero (CSS keyframes in globals.css). Oversized so its
+          edges stay clipped while it moves; static under reduced motion. */}
+      <div
+        aria-hidden="true"
+        className="hero-light-sweep pointer-events-none absolute -inset-[35%] transform-gpu animate-light-sweep motion-reduce:animate-none"
       />
     </div>
   );
