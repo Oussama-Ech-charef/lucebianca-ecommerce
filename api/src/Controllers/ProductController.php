@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use App\Core\Cache;
 use App\Core\Request;
 use App\Models\Product;
 use App\Models\Variant;
@@ -26,6 +27,7 @@ final class ProductController extends Controller
     private ProductVariantRepository $variants;
     private ProductImageRepository $images;
     private ReviewRepository $reviews;
+    private Cache $cache;
 
     public function __construct()
     {
@@ -33,6 +35,7 @@ final class ProductController extends Controller
         $this->variants = new ProductVariantRepository();
         $this->images   = new ProductImageRepository();
         $this->reviews  = new ReviewRepository();
+        $this->cache    = new Cache(null, 300); // 5 minutes cache
     }
 
     /**
@@ -54,15 +57,15 @@ final class ProductController extends Controller
             'max_price' => $request->query('max_price'),
         ];
 
-        $result = $this->products->paginate($page, $perPage, $filters);
+        // Cache key includes all query params to avoid cache collision
+        $cacheKey = 'products:list:' . md5(json_encode(['page' => $page, 'per_page' => $perPage, 'filters' => $filters]));
 
-        // One query for every image on the page, grouped by product id.
-        $imagesByProduct = [];
-        foreach ($this->images->allForProducts(
-            array_map(static fn (Product $p): int => $p->id, $result['items'])
-        ) as $row) {
-            $imagesByProduct[$row['product_id']][] = $row;
-        }
+        $result = $this->cache->remember($cacheKey, function () use ($page, $perPage, $filters) {
+            return $this->products->paginate($page, $perPage, $filters, true);
+        }, 300);
+
+        $productIds = array_column($result['items'], 'id');
+        $imagesByProduct = $this->images->groupByProducts($productIds);
 
         $items = array_map(
             static fn (Product $product): array => [
