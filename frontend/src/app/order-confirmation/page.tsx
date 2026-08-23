@@ -6,6 +6,7 @@ import { ApiError } from "@/lib/api";
 import { fetchOrder, formatPrice } from "@/lib/storefront";
 import type { OrderDetail } from "@/lib/types";
 import ClearCart from "./clear-cart";
+import GuestRegistrationPrompt from "./guest-registration-prompt";
 
 type PageProps = { searchParams: Promise<{ id?: string | string[] }> };
 
@@ -151,6 +152,10 @@ export default async function ConfirmationPage({ searchParams }: PageProps) {
             : "The store will contact you on this phone number to confirm delivery."}
         </p>
       </section>
+
+      {/* Guests only — hidden once a customer session exists; dismissing
+          never affects the order details above. */}
+      <GuestRegistrationPrompt />
 
       <Link
         href="/shop"
