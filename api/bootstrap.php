@@ -48,7 +48,7 @@ if ($origin !== '' && in_array($origin, $allowedOrigins, true)) {
     header('Vary: Origin');
 }
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, X-CSRF-Token');
 header('Access-Control-Max-Age: 86400');
 
 // Handle CORS preflight before any routing.

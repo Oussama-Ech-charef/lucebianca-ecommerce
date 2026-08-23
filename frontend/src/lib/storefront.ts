@@ -6,7 +6,7 @@
  * API (a paused product disappears from the storefront immediately).
  */
 
-import { api } from "@/lib/api";
+import { api, fetchCsrfToken } from "@/lib/api";
 import type {
   CartValidationResponse,
   CategoriesResponse,
@@ -144,5 +144,23 @@ export function submitContactMessage(payload: {
   return api<{ data: { id: number } }>("/api/contact", {
     method: "POST",
     body: payload,
+  });
+}
+
+/**
+ * POST /api/newsletter/subscribe — joins the newsletter list. CSRF-guarded
+ * (and rate-limited with /contact), so a fresh token is fetched per call and
+ * sent as X-CSRF-Token. Resolves with subscribed=false ("Already
+ * subscribed.") for repeat signups instead of failing; throws ApiError on
+ * 422 (invalid email) or 429 (rate limit).
+ */
+export async function subscribeToNewsletter(
+  email: string,
+): Promise<{ data: { subscribed: boolean; message: string } }> {
+  const csrfToken = await fetchCsrfToken();
+  return api("/api/newsletter/subscribe", {
+    method: "POST",
+    headers: { "X-CSRF-Token": csrfToken },
+    body: { email },
   });
 }

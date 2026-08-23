@@ -1,6 +1,8 @@
 import Image from "next/image";
 import Link from "next/link";
 
+import NewsletterForm from "@/components/newsletter-form";
+
 // Footer link groups. Help & Info pages are phase 14 (static/semi-static
 // info + legal pages); the storefront is deliberately limited to real routes.
 const SHOP_LINKS = [{ label: "Shop", href: "/shop" }];
@@ -19,7 +21,7 @@ export default function Footer() {
   return (
     <footer className="border-t border-neutral-200 bg-white">
       <div className="mx-auto w-full max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
-        <div className="flex flex-col items-center gap-10 md:flex-row md:items-start md:justify-between md:gap-8">
+        <div className="flex flex-col items-center gap-10 lg:flex-row lg:items-start lg:justify-between lg:gap-8">
           <div className="flex flex-col items-center md:items-start">
             <Image
               src="/logo.png"
@@ -72,6 +74,10 @@ export default function Footer() {
               </ul>
             </div>
           </nav>
+
+          <div className="w-full max-w-md text-center sm:max-w-md lg:max-w-xs lg:text-left">
+            <NewsletterForm />
+          </div>
         </div>
 
         <p className="mt-10 border-t border-neutral-100 pt-6 text-center text-xs text-neutral-400">
