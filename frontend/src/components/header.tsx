@@ -83,16 +83,19 @@ export default function Header() {
             href="/"
             onClick={closeAll}
             aria-label="Luce Bianca home"
-            className="flex items-center py-1 pr-3 sm:pr-4"
+            className="flex items-center gap-2 py-1 pr-3 sm:pr-4"
           >
             <Image
               src="/logo.png"
-              alt="Luce Bianca"
+              alt=""
               width={126}
               height={84}
               priority
               className="h-12 w-auto md:h-14"
             />
+            <span className="font-serif text-lg font-medium text-neutral-900 hidden sm:block">
+              Luce Bianca
+            </span>
           </Link>
 
           <nav

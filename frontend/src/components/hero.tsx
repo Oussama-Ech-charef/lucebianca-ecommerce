@@ -50,6 +50,9 @@ export default function Hero() {
         style={{ y: contentY, opacity: contentOpacity }}
         className="relative z-10 mx-auto w-full max-w-6xl px-4 py-24 sm:px-6 lg:px-8"
       >
+        <p className="font-serif text-lg font-medium text-white/70 tracking-wide mb-4">
+          Luce Bianca
+        </p>
         <p className="bg-gradient-to-r from-white via-chrome-200 to-chrome-400 bg-clip-text text-xs uppercase tracking-[0.4em] text-transparent">
           Premium custom t-shirts · Casablanca
         </p>

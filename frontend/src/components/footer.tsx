@@ -23,13 +23,18 @@ export default function Footer() {
       <div className="mx-auto w-full max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
         <div className="flex flex-col items-center gap-10 lg:flex-row lg:items-start lg:justify-between lg:gap-8">
           <div className="flex flex-col items-center md:items-start">
-            <Image
-              src="/logo.png"
-              alt="Luce Bianca"
-              width={126}
-              height={84}
-              className="h-12 w-auto md:h-14"
-            />
+            <div className="flex items-center gap-2">
+              <Image
+                src="/logo.png"
+                alt=""
+                width={126}
+                height={84}
+                className="h-12 w-auto md:h-14"
+              />
+              <span className="font-serif text-lg font-medium text-neutral-900 hidden sm:block">
+                Luce Bianca
+              </span>
+            </div>
             <p className="mt-2 text-xs uppercase tracking-[0.3em] text-neutral-400">
               Casual Luxury
             </p>
