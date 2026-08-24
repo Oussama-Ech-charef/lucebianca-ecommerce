@@ -91,9 +91,9 @@ export default function Header() {
               width={126}
               height={84}
               priority
-              className="h-12 w-auto md:h-14"
+              className="h-10 w-auto md:h-12"
             />
-            <span className="font-serif text-lg font-medium text-neutral-900 hidden sm:block">
+            <span className="font-serif text-base font-medium text-neutral-900 truncate max-w-[140px] sm:max-w-[180px] md:max-w-none">
               Luce Bianca
             </span>
           </Link>
@@ -127,7 +127,7 @@ export default function Header() {
               aria-label="Search"
               aria-expanded={isOpen("search")}
               onClick={() => { toggleOverlay("search"); setOpen("cart", false); }}
-              className="flex h-10 w-10 items-center justify-center rounded-[4px] text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
+              className="hidden md:flex h-10 w-10 items-center justify-center rounded-[4px] text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
             >
               <SearchIcon />
             </button>
