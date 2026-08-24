@@ -73,3 +73,40 @@ body {
     transparent 72%
   );
 }
+
+/* Premium native <select> — shared by shop filters and admin order controls.
+   Keeps the real dropdown (keyboard/AT behavior untouched) but restyles the
+   closed control: custom chevron via inline SVG data-URI (no assets), the
+   same neutral border/focus language as text inputs. Pair with the standard
+   field classes; add `.select-field--error` for validation failures. */
+.select-field {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%2371717a' stroke-width='1.5'%3E%3Cpath d='m5.5 8 4.5 4.5L14.5 8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.65rem center;
+  background-size: 1rem 1rem;
+  padding-right: 2.25rem;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.select-field:hover:not(:disabled) {
+  border-color: #a1a1aa; /* neutral-400 */
+}
+
+.select-field:focus {
+  outline: none;
+  border-color: #171717; /* neutral-900 */
+  box-shadow: 0 0 0 1px #171717;
+}
+
+.select-field:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23d4d4d8' stroke-width='1.5'%3E%3Cpath d='m5.5 8 4.5 4.5L14.5 8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.select-field--error,
+.select-field--error:hover:not(:disabled) {
+  border-color: #b91c1c; /* red-700 */
+}

@@ -57,6 +57,7 @@ export default function FilterPanel({
 
   const labelInput =
     "mt-1 block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 focus:border-neutral-500 focus:outline-none";
+  const selectClass = `${labelInput} select-field`;
 
   return (
     <div className="flex flex-wrap items-end gap-3 rounded-xl border border-neutral-200 bg-white p-4">
@@ -65,7 +66,7 @@ export default function FilterPanel({
         <select
           value={category}
           onChange={(event) => setCategory(event.target.value)}
-          className={labelInput}
+          className={selectClass}
         >
           <option value="">All categories</option>
           {categories.map((item) => (

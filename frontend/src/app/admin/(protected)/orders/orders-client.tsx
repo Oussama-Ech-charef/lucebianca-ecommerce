@@ -275,7 +275,7 @@ export default function OrdersClient() {
       onChange={(event) =>
         handleStatusChange(order.id, event.target.value as OrderStatus)
       }
-      className={`rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm outline-none transition-colors focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900 disabled:cursor-not-allowed disabled:opacity-60 ${
+      className={`select-field rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm outline-none transition-colors focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900 disabled:cursor-not-allowed disabled:opacity-60 ${
         compact ? "w-full" : ""
       }`}
     >
@@ -342,7 +342,7 @@ export default function OrdersClient() {
             onChange={(event) =>
               changeFilter(event.target.value as OrderStatus | "")
             }
-            className="rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm outline-none transition-colors focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900"
+            className="select-field rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm outline-none transition-colors focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900"
           >
             <option value="">All statuses</option>
             {STATUS_OPTIONS.map((status) => (
@@ -589,7 +589,7 @@ function OrderTableRow({
               onChange={(event) =>
                 onStatusChange(event.target.value as OrderStatus)
               }
-              className="rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm outline-none transition-colors focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900 disabled:cursor-not-allowed disabled:opacity-60"
+              className="select-field rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm outline-none transition-colors focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {STATUS_OPTIONS.map((status) => (
                 <option key={status} value={status}>

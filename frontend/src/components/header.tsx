@@ -2,7 +2,8 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useState } from "react";
+import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 
 import { useCart } from "@/lib/cart-context";
 import { useCustomerSession } from "@/lib/customer-auth";
@@ -15,21 +16,64 @@ const NAV_LINKS = [
   { label: "Wishlist", href: "/wishlist" },
 ];
 
+type OverlayKey = "mobile" | "search" | "cart";
+
 export default function Header() {
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [cartOpen, setCartOpen] = useState(false);
+  const pathname = usePathname();
+  // Overlays remember the route they were opened on: navigating anywhere else
+  // (link click, back/forward) implicitly closes them — derived, so no
+  // close-on-route-change effect is needed.
+  const [overlays, setOverlays] = useState<{
+    path: string;
+    open: Record<OverlayKey, boolean>;
+  }>({ path: pathname, open: { mobile: false, search: false, cart: false } });
   const [query, setQuery] = useState("");
 
   const { items, totalItems, totalPrice, updateQuantity, removeItem } =
     useCart();
   const customerSession = useCustomerSession();
 
-  function closeAll() {
-    setMobileOpen(false);
-    setSearchOpen(false);
-    setCartOpen(false);
+  const onCurrentRoute = overlays.path === pathname;
+  const isOpen = (key: OverlayKey) => onCurrentRoute && overlays.open[key];
+
+  function setOpen(key: OverlayKey, value: boolean) {
+    setOverlays((prev) => ({
+      path: pathname,
+      open: { ...prev.open, [key]: value },
+    }));
   }
+
+  function toggleOverlay(key: OverlayKey) {
+    setOverlays((prev) => ({
+      path: pathname,
+      open: { ...prev.open, [key]: !(prev.path === pathname && prev.open[key]) },
+    }));
+  }
+
+  function closeAll() {
+    setOverlays((prev) => ({
+      path: prev.path,
+      open: { mobile: false, search: false, cart: false },
+    }));
+  }
+
+  // Escape closes whichever overlay is open (menu / search / cart drawer).
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") {
+        return;
+      }
+      setOverlays((prev) => ({
+        path: prev.path,
+        open: { mobile: false, search: false, cart: false },
+      }));
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const isNavLinkActive = (href: string) =>
+    pathname === href || pathname.startsWith(`${href}/`);
 
   return (
     <>
@@ -55,26 +99,31 @@ export default function Header() {
             aria-label="Main"
             className="hidden items-center gap-8 md:flex"
           >
-            {NAV_LINKS.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className="text-sm text-neutral-600 transition-colors hover:text-neutral-900"
-              >
-                {link.label}
-              </Link>
-            ))}
+            {NAV_LINKS.map((link) => {
+              const active = isNavLinkActive(link.href);
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  aria-current={active ? "page" : undefined}
+                  className={`border-b pb-1 text-sm transition-colors ${
+                    active
+                      ? "border-neutral-900 font-medium text-neutral-900"
+                      : "border-transparent text-neutral-600 hover:border-neutral-300 hover:text-neutral-900"
+                  }`}
+                >
+                  {link.label}
+                </Link>
+              );
+            })}
           </nav>
 
           <div className="flex items-center gap-1 sm:gap-2">
             <button
               type="button"
               aria-label="Search"
-              aria-expanded={searchOpen}
-              onClick={() => {
-                setSearchOpen((open) => !open);
-                setCartOpen(false);
-              }}
+              aria-expanded={isOpen("search")}
+              onClick={() => { toggleOverlay("search"); setOpen("cart", false); }}
               className="flex h-10 w-10 items-center justify-center rounded-[4px] text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
             >
               <SearchIcon />
@@ -83,10 +132,7 @@ export default function Header() {
               <Link
                 href="/account"
                 aria-label="My account"
-                onClick={() => {
-                  setSearchOpen(false);
-                  setCartOpen(false);
-                }}
+                onClick={() => { setOpen("search", false); setOpen("cart", false); }}
                 className="flex h-10 w-10 items-center justify-center rounded-[4px] text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
               >
                 <span className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-900 text-[10px] font-medium uppercase leading-none text-white">
@@ -97,10 +143,7 @@ export default function Header() {
               <Link
                 href="/login"
                 aria-label="Sign in"
-                onClick={() => {
-                  setSearchOpen(false);
-                  setCartOpen(false);
-                }}
+                onClick={() => { setOpen("search", false); setOpen("cart", false); }}
                 className="flex h-10 w-10 items-center justify-center rounded-[4px] text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
               >
                 <UserIcon />
@@ -109,11 +152,8 @@ export default function Header() {
             <button
               type="button"
               aria-label="Open cart"
-              aria-expanded={cartOpen}
-              onClick={() => {
-                setCartOpen((open) => !open);
-                setSearchOpen(false);
-              }}
+              aria-expanded={isOpen("cart")}
+              onClick={() => { toggleOverlay("cart"); setOpen("search", false); }}
               className="flex h-10 w-10 items-center justify-center rounded-[4px] text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
             >
               <span className="relative inline-block">
@@ -127,20 +167,17 @@ export default function Header() {
             </button>
             <button
               type="button"
-              aria-label={mobileOpen ? "Close menu" : "Open menu"}
-              aria-expanded={mobileOpen}
-              onClick={() => {
-                setMobileOpen((open) => !open);
-                setSearchOpen(false);
-              }}
+              aria-label={isOpen("mobile") ? "Close menu" : "Open menu"}
+              aria-expanded={isOpen("mobile")}
+              onClick={() => { toggleOverlay("mobile"); setOpen("search", false); }}
               className="flex h-10 w-10 items-center justify-center rounded-[4px] text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900 md:hidden"
             >
-              {mobileOpen ? <CloseIcon /> : <MenuIcon />}
+              {isOpen("mobile") ? <CloseIcon /> : <MenuIcon />}
             </button>
           </div>
         </div>
 
-        {searchOpen ? (
+        {isOpen("search") ? (
           <div className="border-t border-neutral-200 bg-white">
             <div className="mx-auto max-w-3xl px-4 py-4 sm:px-6">
               <div className="flex items-center gap-3 border-b-2 border-neutral-900 pb-2">
@@ -157,7 +194,7 @@ export default function Header() {
                 <button
                   type="button"
                   aria-label="Close search"
-                  onClick={() => setSearchOpen(false)}
+                  onClick={() => setOpen("search", false)}
                   className="text-neutral-500 transition-colors hover:text-neutral-900"
                 >
                   <CloseIcon />
@@ -171,12 +208,12 @@ export default function Header() {
         ) : null}
       </header>
 
-      {mobileOpen ? (
+      {isOpen("mobile") ? (
         <div className="fixed inset-0 z-[60] md:hidden">
           <button
             type="button"
             aria-label="Close menu"
-            onClick={() => setMobileOpen(false)}
+            onClick={() => setOpen("mobile", false)}
             className="absolute inset-0 bg-black/40"
           />
           <nav
@@ -188,28 +225,36 @@ export default function Header() {
               <button
                 type="button"
                 aria-label="Close menu"
-                onClick={() => setMobileOpen(false)}
+                onClick={() => setOpen("mobile", false)}
                 className="rounded-[4px] p-1 text-neutral-700"
               >
                 <CloseIcon />
               </button>
             </div>
             <div className="mt-8 flex flex-col gap-6">
-              {NAV_LINKS.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  onClick={closeAll}
-                  className="font-serif text-2xl text-neutral-900"
-                >
-                  {link.label}
-                </Link>
-              ))}
+              {NAV_LINKS.map((link) => {
+                const active = isNavLinkActive(link.href);
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    onClick={closeAll}
+                    aria-current={active ? "page" : undefined}
+                    className={`font-serif text-2xl ${
+                      active
+                        ? "text-neutral-900 underline underline-offset-8"
+                        : "text-neutral-900"
+                    }`}
+                  >
+                    {link.label}
+                  </Link>
+                );
+              })}
               <button
                 type="button"
                 onClick={() => {
-                  setMobileOpen(false);
-                  setSearchOpen(true);
+                  setOpen("mobile", false);
+                  setOpen("search", true);
                 }}
                 className="flex items-center gap-3 text-base text-neutral-700"
               >
@@ -224,12 +269,12 @@ export default function Header() {
         </div>
       ) : null}
 
-      {cartOpen ? (
+      {isOpen("cart") ? (
         <div className="fixed inset-0 z-[55]">
           <button
             type="button"
             aria-label="Close cart"
-            onClick={() => setCartOpen(false)}
+            onClick={() => setOpen("cart", false)}
             className="absolute inset-0 bg-black/40"
           />
           <div className="absolute right-0 top-0 flex max-h-[85vh] w-full max-w-sm flex-col border-l border-neutral-200 bg-white shadow-xl">
@@ -238,7 +283,7 @@ export default function Header() {
               <button
                 type="button"
                 aria-label="Close cart"
-                onClick={() => setCartOpen(false)}
+                onClick={() => setOpen("cart", false)}
                 className="rounded-[4px] p-1 text-neutral-700"
               >
                 <CloseIcon />
@@ -255,7 +300,7 @@ export default function Header() {
                 </p>
                 <Link
                   href="/shop"
-                  onClick={() => setCartOpen(false)}
+                  onClick={() => setOpen("cart", false)}
                   className="mt-6 inline-block text-sm font-medium text-neutral-900 underline underline-offset-4"
                 >
                   Continue shopping
@@ -269,7 +314,7 @@ export default function Header() {
                       <li key={item.variant_id} className="flex gap-4 py-4">
                         <Link
                           href={`/product/${item.product_slug}`}
-                          onClick={() => setCartOpen(false)}
+                          onClick={() => setOpen("cart", false)}
                           className="shrink-0"
                         >
                           {item.image_url ? (
@@ -290,7 +335,7 @@ export default function Header() {
                           <div className="flex items-start justify-between gap-2">
                             <Link
                               href={`/product/${item.product_slug}`}
-                              onClick={() => setCartOpen(false)}
+                              onClick={() => setOpen("cart", false)}
                               className="truncate font-serif text-sm text-neutral-900"
                             >
                               {item.product_name}
@@ -357,14 +402,14 @@ export default function Header() {
                   </div>
                   <Link
                     href="/checkout"
-                    onClick={() => setCartOpen(false)}
+                    onClick={() => setOpen("cart", false)}
                     className="mt-4 block rounded-lg bg-neutral-900 px-4 py-3 text-center text-sm font-medium text-white transition-colors hover:bg-neutral-700"
                   >
                     Checkout
                   </Link>
                   <Link
                     href="/cart"
-                    onClick={() => setCartOpen(false)}
+                    onClick={() => setOpen("cart", false)}
                     className="mt-2 block text-center text-sm text-neutral-600 underline underline-offset-4 transition-colors hover:text-neutral-900"
                   >
                     View full cart
