@@ -58,15 +58,19 @@ final class CategoriesController extends Controller
         $slug = $baseSlug;
         $n = 2;
 
-        while ($this->categories->slugExists($slug)) {
-            if ($givenSlug !== '') {
-                throw new ConflictException('Slug already exists.');
+        try {
+            while ($this->categories->slugExists($slug)) {
+                if ($givenSlug !== '') {
+                    throw new ConflictException('Slug already exists.');
+                }
+                $slug = "{$baseSlug}-{$n}";
+                $n++;
             }
-            $slug = "{$baseSlug}-{$n}";
-            $n++;
-        }
 
-        $id = $this->categories->create($name, $slug);
+            $id = $this->categories->create($name, $slug);
+        } catch (ConflictException $e) {
+            $this->error($e->getMessage(), 409);
+        }
         $category = $this->categories->findById($id);
 
         $this->json(['data' => $category->toArray()], 201);
@@ -102,7 +106,7 @@ final class CategoriesController extends Controller
             if ($slug === '') {
                 $errors['slug'] = 'Slug is invalid.';
             } elseif ($this->categories->slugExists($slug, $id)) {
-                throw new ConflictException('Slug already exists.');
+                $this->error('Slug already exists.', 409);
             } else {
                 $fields['slug'] = $slug;
             }

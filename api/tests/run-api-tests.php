@@ -181,6 +181,18 @@ $pdo->exec(
      VALUES (1, 'M', 'Black', 'TEST-TEE-M-BLK', NULL, 5)"
 );
 
+// Offline-seeded admin (same path as scripts/create-admin.php) so the admin
+// auth + settings + category suites can exercise role-'admin' endpoints.
+$adminStmt = $pdo->prepare(
+    'INSERT INTO admins (name, email, password_hash, role) VALUES (?, ?, ?, ?)'
+);
+$adminStmt->execute([
+    'Test Admin',
+    'admin@example.com',
+    password_hash('AdminPass123!', PASSWORD_DEFAULT),
+    'admin',
+]);
+
 // --- 5. Boot the real API ------------------------------------------------
 // Child stdout/stderr go to temp FILES, not pipes: on Windows proc_open
 // pipes ignore stream_set_blocking and any read can block forever once the
@@ -490,6 +502,55 @@ check(
     $status === 201 && (string) ($memberOrder['data']['user_id'] ?? '') === (string) ($auth2['user']['id'] ?? '-1'),
     'authenticated checkout attributes order.user_id to the session'
 );
+
+// --- Admin settings & categories (regression: settings column names,
+// --- missing CategoryRepository::slugExists) ------------------------------
+[$status, , $adminLogin] = httpRequest('POST', '/api/admin/auth/login', [
+    'email' => 'admin@example.com',
+    'password' => 'AdminPass123!',
+]);
+$adminToken = ['Authorization' => 'Bearer ' . ($adminLogin['token'] ?? '')];
+check($status === 200 && is_string($adminLogin['token'] ?? null), 'admin login returns a session token');
+
+[, , $csrfA] = httpRequest('GET', '/api/csrf-token');
+$csrfAdm = ['X-CSRF-Token' => $csrfA['csrf_token'] ?? ''];
+
+// Settings: real columns are setting_key/setting_value — a wrong column name
+// here previously produced "Unknown column 'key'" 500s.
+[$status, , $settings] = httpRequest('GET', '/api/admin/settings', null, $adminToken);
+check($status === 200 && is_array($settings['data'] ?? null), 'GET admin settings -> 200 key/value object');
+
+[$status] = httpRequest('PUT', '/api/admin/settings', [
+    'store_name' => 'Luce Bianca Test',
+    'shipping_cost' => '35.00',
+], $adminToken + $csrfAdm);
+check($status === 200, 'PUT admin settings -> 200 (upsert on setting_key)');
+
+[$status, , $settingsAfter] = httpRequest('GET', '/api/admin/settings', null, $adminToken);
+check(
+    ($settingsAfter['data']['store_name'] ?? '') === 'Luce Bianca Test'
+        && ($settingsAfter['data']['shipping_cost'] ?? '') === '35.00',
+    'settings upsert round-trips values'
+);
+
+// Categories: create with auto-slug, explicit duplicate slug -> 409, update.
+[$status, , $category] = httpRequest('POST', '/api/admin/categories', ['name' => 'Hoodies'], $adminToken + $csrfAdm);
+check($status === 201 && ($category['data']['slug'] ?? '') === 'hoodies', 'category create -> 201 with auto slug');
+
+[, , $csrfA2] = httpRequest('GET', '/api/csrf-token');
+[$status, , ] = httpRequest('POST', '/api/admin/categories', ['name' => 'Other', 'slug' => 'hoodies'], $adminToken + ['X-CSRF-Token' => $csrfA2['csrf_token'] ?? '']);
+check($status === 409, 'category create with taken slug -> 409');
+
+$category2Id = 0;
+[$status, , $category2] = httpRequest('POST', '/api/admin/categories', ['name' => 'Tees'], $adminToken + $csrfAdm);
+$category2Id = (int) ($category2['data']['id'] ?? 0);
+check($status === 201 && ($category2['data']['slug'] ?? '') === 'tees', 'second category create -> 201');
+
+[$status] = httpRequest('PUT', "/api/admin/categories/{$category2Id}", ['slug' => 'hoodies'], $adminToken + $csrfAdm);
+check($status === 409, 'category update to another category slug -> 409');
+
+[$status, , $renamed] = httpRequest('PUT', "/api/admin/categories/{$category2Id}", ['slug' => 't-shirts'], $adminToken + $csrfAdm);
+check($status === 200 && ($renamed['data']['slug'] ?? '') === 't-shirts', 'category update to free slug -> 200');
 
 // --- Error-response safety ------------------------------------------------
 [, , $nf] = httpRequest('GET', '/api/nonexistent-route');

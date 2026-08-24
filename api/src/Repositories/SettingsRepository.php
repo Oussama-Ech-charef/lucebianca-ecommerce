@@ -18,7 +18,7 @@ final class SettingsRepository extends Repository
     public function get(string $key): ?string
     {
         $stmt = $this->db->prepare("
-            SELECT value FROM settings WHERE `key` = :key
+            SELECT setting_value AS value FROM settings WHERE setting_key = :key
         ");
         $stmt->bindValue(':key', $key, PDO::PARAM_STR);
         $stmt->execute();
@@ -41,7 +41,7 @@ final class SettingsRepository extends Repository
 
         $placeholders = implode(',', array_fill(0, count($keys), '?'));
         $stmt = $this->db->prepare("
-            SELECT `key`, value FROM settings WHERE `key` IN ($placeholders)
+            SELECT setting_key AS `key`, setting_value AS value FROM settings WHERE setting_key IN ($placeholders)
         ");
 
         foreach ($keys as $index => $key) {
@@ -65,7 +65,7 @@ final class SettingsRepository extends Repository
      */
     public function getAll(): array
     {
-        $stmt = $this->db->prepare("SELECT `key`, value FROM settings");
+        $stmt = $this->db->prepare("SELECT setting_key AS `key`, setting_value AS value FROM settings");
         $stmt->execute();
 
         $result = [];
@@ -82,13 +82,13 @@ final class SettingsRepository extends Repository
     public function set(string $key, string $value): void
     {
         $stmt = $this->db->prepare("
-            INSERT INTO settings (`key`, value)
+            INSERT INTO settings (setting_key, setting_value)
             VALUES (:key, :value)
-            ON DUPLICATE KEY UPDATE value = :value2
+            ON DUPLICATE KEY UPDATE setting_value = :value_dup
         ");
         $stmt->bindValue(':key', $key, PDO::PARAM_STR);
         $stmt->bindValue(':value', $value, PDO::PARAM_STR);
-        $stmt->bindValue(':value2', $value, PDO::PARAM_STR);
+        $stmt->bindValue(':value_dup', $value, PDO::PARAM_STR);
         $stmt->execute();
     }
 
@@ -109,7 +109,7 @@ final class SettingsRepository extends Repository
      */
     public function delete(string $key): void
     {
-        $stmt = $this->db->prepare("DELETE FROM settings WHERE `key` = :key");
+        $stmt = $this->db->prepare("DELETE FROM settings WHERE setting_key = :key");
         $stmt->bindValue(':key', $key, PDO::PARAM_STR);
         $stmt->execute();
     }
