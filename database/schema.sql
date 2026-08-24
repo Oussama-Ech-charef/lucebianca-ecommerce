@@ -56,6 +56,7 @@ CREATE TABLE products (
   slug             VARCHAR(180)   NOT NULL,
   description      TEXT           NULL,
   base_price       DECIMAL(10,2)  NOT NULL,   -- DECIMAL, not FLOAT, to avoid rounding errors in prices
+  sale_price       DECIMAL(10,2)  NULL,       -- if set and < base_price, this is the active sale price
   category_id      INT UNSIGNED   NULL,
   is_active        TINYINT(1)     NOT NULL DEFAULT 1,  -- 0 = product paused (hidden from the site without being deleted)
   meta_title       VARCHAR(160)   NULL,

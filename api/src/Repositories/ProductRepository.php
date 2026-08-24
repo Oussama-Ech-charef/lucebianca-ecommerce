@@ -157,7 +157,7 @@ final class ProductRepository extends Repository
      * @param array{
      *   name: string, slug: string, base_price: string, is_active: int,
      *   meta_title: string, meta_description: string,
-     *   description: ?string, category_id: ?int
+     *   description: ?string, category_id: ?int, sale_price: ?string
      * } $data Sanitized product columns.
      *
      * @return int Auto-increment id of the new record.
@@ -166,15 +166,19 @@ final class ProductRepository extends Repository
     {
         $stmt = $this->db->prepare(
             'INSERT INTO products
-               (name, slug, description, base_price, category_id, is_active, meta_title, meta_description)
+               (name, slug, description, base_price, sale_price, category_id, is_active, meta_title, meta_description)
              VALUES
-               (:name, :slug, :description, :base_price, :category_id, :is_active, :meta_title, :meta_description)'
+               (:name, :slug, :description, :base_price, :sale_price, :category_id, :is_active, :meta_title, :meta_description)'
         );
         $stmt->bindValue(':name', $data['name']);
         $stmt->bindValue(':slug', $data['slug']);
-        $stmt->bindValue(':description', $data['description'] ?? null);
+        $description = $data['description'] ?? null;
+        $stmt->bindValue(':description', $description, $description === null ? \PDO::PARAM_NULL : \PDO::PARAM_STR);
         $stmt->bindValue(':base_price', $data['base_price']);
-        $stmt->bindValue(':category_id', $data['category_id'] ?? null);
+        $salePrice = $data['sale_price'] ?? null;
+        $stmt->bindValue(':sale_price', $salePrice, $salePrice === null ? \PDO::PARAM_NULL : \PDO::PARAM_STR);
+        $categoryId = $data['category_id'] ?? null;
+        $stmt->bindValue(':category_id', $categoryId, $categoryId === null ? \PDO::PARAM_NULL : \PDO::PARAM_INT);
         $stmt->bindValue(':is_active', (int) $data['is_active'], \PDO::PARAM_INT);
         $stmt->bindValue(':meta_title', $data['meta_title']);
         $stmt->bindValue(':meta_description', $data['meta_description']);
@@ -187,7 +191,7 @@ final class ProductRepository extends Repository
      * Updates only the provided whitelisted product columns.
      *
      * @param int   $id     Product id to update.
-     * @param array $fields Subset of: name, slug, description, base_price,
+     * @param array $fields Subset of: name, slug, description, base_price, sale_price,
      *                      category_id, is_active, meta_title, meta_description.
      */
     public function update(int $id, array $fields): void
@@ -197,6 +201,7 @@ final class ProductRepository extends Repository
             'slug'             => 'string',
             'description'      => 'string',
             'base_price'       => 'string',
+            'sale_price'       => 'string',
             'category_id'      => 'int|null',
             'is_active'        => 'int',
             'meta_title'       => 'string',
@@ -221,13 +226,11 @@ final class ProductRepository extends Repository
             if (!isset($allowed[$key])) {
                 continue;
             }
-            if (in_array($key, $intKeys, true)) {
+            if ($value === null) {
+                $stmt->bindValue(":{$key}", null, \PDO::PARAM_NULL);
+            } elseif (in_array($key, $intKeys, true)) {
                 // Nullable category_id stays NULL; is_active is always an int.
-                $stmt->bindValue(
-                    ":{$key}",
-                    $value === null ? null : (int) $value,
-                    $value === null ? \PDO::PARAM_NULL : \PDO::PARAM_INT
-                );
+                $stmt->bindValue(":{$key}", (int) $value, \PDO::PARAM_INT);
             } else {
                 $stmt->bindValue(":{$key}", (string) $value);
             }
@@ -245,5 +248,51 @@ final class ProductRepository extends Repository
         $stmt = $this->db->prepare('DELETE FROM products WHERE id = :id');
         $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
         $stmt->execute();
+    }
+
+    /**
+     * Returns the newest active products (e.g., for "New Arrivals" section).
+     *
+     * @param int $limit Maximum number of products to return.
+     * @return array<int, Product>
+     */
+    public function getNewestActive(int $limit = 8): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT * FROM products WHERE is_active = 1 ORDER BY created_at DESC LIMIT :limit'
+        );
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return array_map(
+            static fn (array $row): Product => Product::fromRow($row),
+            $stmt->fetchAll()
+        );
+    }
+
+    /**
+     * Returns active products with a valid sale price (sale_price > 0 and sale_price < base_price).
+     *
+     * @param int $limit Maximum number of products to return.
+     * @return array<int, Product>
+     */
+    public function getDiscountedActive(int $limit = 8): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT * FROM products
+             WHERE is_active = 1
+               AND sale_price IS NOT NULL
+               AND sale_price > 0
+               AND sale_price < base_price
+             ORDER BY created_at DESC
+             LIMIT :limit'
+        );
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return array_map(
+            static fn (array $row): Product => Product::fromRow($row),
+            $stmt->fetchAll()
+        );
     }
 }

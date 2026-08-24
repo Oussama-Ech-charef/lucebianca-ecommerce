@@ -73,7 +73,10 @@ final class OrderService
                 continue;
             }
 
-            $unitPrice          = $row['price'] ?? $row['base_price'];
+            // Pricing rule (see sale_price migration): a valid product sale_price
+            // (positive and strictly less than base_price) is the effective price
+            // for every variant; otherwise fall back to variant.price ?? base_price.
+            $unitPrice          = $this->effectiveUnitPrice($row);
             $stock              = (int) $row['stock_quantity'];
             $lineAvailable      = $stock >= $line['quantity'];
             $lineReport         = [
@@ -199,7 +202,7 @@ final class OrderService
                 );
             }
 
-            $unitPrice = (string) ($row['price'] ?? $row['base_price']);
+            $unitPrice = $this->effectiveUnitPrice($row);
             $totalCents += (int) round(((float) $unitPrice) * 100) * $line['quantity'];
             $resolved[] = [
                 'variant_id' => $line['variant_id'],
@@ -315,12 +318,12 @@ final class OrderService
         // Send shipping status email if order status changed
         if ($order !== null && isset($fields['status'])) {
             // Get customer name and email for notification
-            $customerName = $order->customer_name;
+            $customerName = $order->customerName;
             $email = null;
 
-            if ($order->user_id !== null) {
+            if ($order->userId !== null) {
                 $userRepo = new \App\Repositories\UserRepository();
-                $user = $userRepo->findById($order->user_id);
+                $user = $userRepo->findById($order->userId);
                 if ($user !== null) {
                     $email = $user->email;
                 }
@@ -381,6 +384,30 @@ final class OrderService
     }
 
     /**
+     * Effective unit price for a variant row (joined with product).
+     *
+     * Rule: if the parent product has a valid sale_price (sale_price IS NOT NULL,
+     * sale_price > 0, sale_price < base_price) that price applies to every
+     * variant; variant.price is ignored in that case. This keeps the storefront
+     * display, cart validation, and order total in sync.
+     */
+    private function effectiveUnitPrice(array $row): string
+    {
+        $salePrice = $row['sale_price'] ?? null;
+        $basePrice = $row['base_price'] ?? null;
+        if (
+            $salePrice !== null && $salePrice !== ''
+            && (float) $salePrice > 0
+            && $basePrice !== null && $basePrice !== ''
+            && (float) $salePrice < (float) $basePrice
+        ) {
+            return (string) $salePrice;
+        }
+
+        return $row['price'] ?? $row['base_price'];
+    }
+
+    /**
      * Whether two decimal price strings represent different amounts.
      */
     private static function pricesDiffer(string $authoritative, string $client): bool
@@ -400,9 +427,9 @@ final class OrderService
         $email = $order->email ?? null;
 
         // Fallback to user email if order email is missing (backward compatibility)
-        if (($email === null || $email === '') && $order->user_id !== null) {
+        if (($email === null || $email === '') && $order->userId !== null) {
             $userRepo = new \App\Repositories\UserRepository();
-            $user = $userRepo->findById($order->user_id);
+            $user = $userRepo->findById($order->userId);
             if ($user !== null) {
                 $email = $user->email;
             }

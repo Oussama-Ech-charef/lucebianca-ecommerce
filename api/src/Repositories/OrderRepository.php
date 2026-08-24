@@ -270,13 +270,13 @@ final class OrderRepository extends Repository
         return $stmt->fetchAll();
     }
 
-    /**
-     * Variants joined with their product (name, slug, base price, active
-     * flag) and main image, keyed by variant id.
+/**
+     * Variants joined with their product (name, slug, base price, sale_price,
+     * active flag) and main image, keyed by variant id.
      *
      * The authoritative per-variant price rule lives here: variant.price when
-     * set, otherwise the product's base_price — the same rule the storefront
-     * detail page uses.
+     * set, otherwise the product's sale_price (if valid), otherwise the product's
+     * base_price — the same rule the storefront detail page uses.
      *
      * @param array<int, int> $variantIds
      *
@@ -292,15 +292,15 @@ final class OrderRepository extends Repository
         $stmt = $this->db->prepare(
             "SELECT v.*,
                     p.id AS product_id, p.name AS product_name, p.slug AS product_slug,
-                    p.base_price, p.is_active,
+                    p.base_price, p.sale_price, p.is_active,
                     (SELECT pi.image_url
                        FROM product_images pi
                       WHERE pi.product_id = p.id
                       ORDER BY pi.is_main DESC, pi.sort_order, pi.id
                       LIMIT 1) AS image_url
-               FROM product_variants v
-               JOIN products p ON p.id = v.product_id
-              WHERE v.id IN ({$placeholders})"
+                 FROM product_variants v
+                 JOIN products p ON p.id = v.product_id
+                WHERE v.id IN ({$placeholders})"
         );
         $stmt->execute(array_values($variantIds));
 

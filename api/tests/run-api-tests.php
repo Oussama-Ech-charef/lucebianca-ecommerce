@@ -578,6 +578,61 @@ check(
     'approved review + average rating appear on public product detail'
 );
 
+// --- Sale price validation & discounted pricing (authoritative sale) ------
+[$status, , $body] = httpRequest('POST', '/api/admin/products', [
+    'name' => 'Sale Test Tee',
+    'base_price' => '100.00',
+    'sale_price' => '120.00',
+    'is_active' => 1,
+    'meta_title' => 'Sale Test',
+    'meta_description' => 'Sale test desc',
+], $adminToken + $csrfAdm);
+check($status === 422 && isset($body['errors']['sale_price']), 'sale_price >= base_price -> 422');
+
+[$status, , $body] = httpRequest('POST', '/api/admin/products', [
+    'name' => 'Sale Test 2',
+    'base_price' => '100.00',
+    'sale_price' => '0',
+    'is_active' => 1,
+    'meta_title' => 'Sale Test 2',
+    'meta_description' => 'Sale test desc',
+], $adminToken + $csrfAdm);
+check($status === 422 && isset($body['errors']['sale_price']), 'sale_price zero -> 422');
+
+[$status, , $saleProduct] = httpRequest('POST', '/api/admin/products', [
+    'name' => 'Sale Valid Tee',
+    'base_price' => '100.00',
+    'sale_price' => '80.00',
+    'is_active' => 1,
+    'meta_title' => 'Sale Valid',
+    'meta_description' => 'Sale valid desc',
+    'variants' => [
+        ['size' => 'M', 'color' => 'Red', 'sku' => 'SALE-VALID-M-RED', 'price' => '', 'stock_quantity' => '5'],
+    ],
+], $adminToken + $csrfAdm);
+check($status === 201 && ($saleProduct['data']['sale_price'] ?? '') === '80.00', 'valid sale_price -> 201 stores sale');
+$saleVariantId = (int) ($saleProduct['data']['variants'][0]['id'] ?? 0);
+
+[, , $detailSale] = httpRequest('GET', '/api/products/sale-valid-tee');
+check(($detailSale['data']['sale_price'] ?? '') === '80.00', 'sale product detail exposes sale_price');
+
+[, , $specialOffers] = httpRequest('GET', '/api/products/special-offers?limit=10');
+$specialIds = array_column($specialOffers['data'] ?? [], 'id');
+check(in_array($saleProduct['data']['id'] ?? 0, $specialIds, true), 'special-offers includes sale product');
+
+[, , $cartSale] = httpRequest('POST', '/api/cart', ['items' => [['variant_id' => $saleVariantId, 'quantity' => 1]]], $csrfAdm);
+check(($cartSale['data']['lines'][0]['unit_price'] ?? '') === '80.00', 'cart validation returns sale price');
+
+[$status, , $orderSale] = httpRequest('POST', '/api/orders', [
+    'customer_name' => 'Sale Buyer',
+    'phone' => '0612345678',
+    'email' => 'salebuyer@example.com',
+    'shipping_address' => '123 Sale St, Casa',
+    'payment_method' => 'cod',
+    'items' => [['variant_id' => $saleVariantId, 'quantity' => 2]],
+], $csrfAdm);
+check($status === 201 && ($orderSale['data']['total_amount'] ?? '') === '160.00' && ($orderSale['data']['items'][0]['price_at_purchase'] ?? '') === '80.00', 'order total uses discounted sale price');
+
 // --- Error-response safety ------------------------------------------------
 [, , $nf] = httpRequest('GET', '/api/nonexistent-route');
 check(($nf['error'] ?? '') === 'Route not found' && count($nf) === 1, 'unknown route -> single generic error key');

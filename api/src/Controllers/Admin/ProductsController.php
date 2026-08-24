@@ -84,20 +84,23 @@ final class ProductsController extends Controller
     {
         $name      = trim((string) $request->input('name', ''));
         $basePrice = (string) $request->input('base_price', '');
+        $salePrice = trim((string) $request->input('sale_price', ''));
         $metaTitle = trim((string) $request->input('meta_title', ''));
         $metaDesc  = trim((string) $request->input('meta_description', ''));
 
         $errors = Validator::validate(
             [
-                'name'             => $name,
-                'base_price'       => $basePrice,
-                'meta_title'       => $metaTitle,
+                'name'       => $name,
+                'base_price' => $basePrice,
+                'sale_price' => $salePrice,
+                'meta_title' => $metaTitle,
                 'meta_description' => $metaDesc,
             ],
             [
-                'name'             => ['required'],
-                'base_price'       => ['required'],
-                'meta_title'       => ['required'],
+                'name'       => ['required'],
+                'base_price' => ['required'],
+                'sale_price' => [],
+                'meta_title' => ['required'],
                 'meta_description' => ['required'],
             ]
         );
@@ -105,6 +108,16 @@ final class ProductsController extends Controller
         // base_price is DECIMAL(10,2); accept up to two decimals, no sign.
         if (!preg_match('/^\d{1,8}(\.\d{1,2})?$/', $basePrice)) {
             $errors['base_price'] = 'Base price must be a valid amount (max 2 decimals).';
+        }
+
+        if ($salePrice !== '' && !preg_match('/^\d{1,8}(\.\d{1,2})?$/', $salePrice)) {
+            $errors['sale_price'] = 'Sale price must be a valid amount (max 2 decimals).';
+        }
+
+        if ($salePrice !== '' && (float) $salePrice <= 0) {
+            $errors['sale_price'] = 'Sale price must be greater than 0.';
+        } elseif ($salePrice !== '' && (float) $salePrice >= (float) $basePrice) {
+            $errors['sale_price'] = 'Sale price must be strictly less than base price.';
         }
 
         $categoryId = $request->input('category_id');
@@ -216,6 +229,7 @@ final class ProductsController extends Controller
                 'slug'             => $slug,
                 'description'      => $description === null || $description === '' ? null : (string) $description,
                 'base_price'       => $basePrice,
+                'sale_price'       => $salePrice !== '' ? $salePrice : null,
                 'category_id'      => $categoryId,
                 'is_active'        => $isActive,
                 'meta_title'       => $metaTitle,
@@ -301,6 +315,29 @@ final class ProductsController extends Controller
                 $errors['base_price'] = 'Base price must be a valid amount (max 2 decimals).';
             } else {
                 $fields['base_price'] = $price;
+            }
+        }
+
+        if (array_key_exists('sale_price', $body)) {
+            $salePrice = trim((string) $body['sale_price']);
+            if ($salePrice === '') {
+                $fields['sale_price'] = null;
+            } else {
+                if (!preg_match('/^\d{1,8}(\.\d{1,2})?$/', $salePrice)) {
+                    $errors['sale_price'] = 'Sale price must be a valid amount (max 2 decimals).';
+                } elseif ((float) $salePrice <= 0) {
+                    $errors['sale_price'] = 'Sale price must be greater than 0.';
+                } else {
+                    // Compare against the new base_price if supplied in this request, otherwise the current one.
+                    $baseForSale = isset($body['base_price'])
+                        ? (string) $body['base_price']
+                        : $product->basePrice;
+                    if ((float) $salePrice >= (float) $baseForSale) {
+                        $errors['sale_price'] = 'Sale price must be strictly less than base price.';
+                    } else {
+                        $fields['sale_price'] = $salePrice;
+                    }
+                }
             }
         }
 

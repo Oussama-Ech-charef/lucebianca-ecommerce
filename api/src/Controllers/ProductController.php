@@ -116,4 +116,61 @@ final class ProductController extends Controller
             ],
         ]);
     }
+
+    /**
+     * GET /api/products/new-arrivals — newest active products (for homepage).
+     *
+     * Returns the same product shape as GET /api/products (including images),
+     * so ProductCard and other storefront components can be reused without
+     * branching on the source endpoint.
+     */
+    public function newArrivals(Request $request): never
+    {
+        $limit = min(20, max(1, (int) $request->query('limit', 8)));
+        $products = $this->products->getNewestActive($limit);
+
+        $this->json(['data' => $this->withImages($products)]);
+    }
+
+    /**
+     * GET /api/products/special-offers — active products with valid sale price.
+     *
+     * A valid sale price is > 0 and strictly less than base_price. Returns the
+     * same product shape as GET /api/products (including images).
+     */
+    public function specialOffers(Request $request): never
+    {
+        $limit = min(20, max(1, (int) $request->query('limit', 8)));
+        $products = $this->products->getDiscountedActive($limit);
+
+        $this->json(['data' => $this->withImages($products)]);
+    }
+
+    /**
+     * Attaches images to a list of products using the same mapping as index().
+     *
+     * @param array<int, Product> $products
+     * @return array<int, array<string, mixed>>
+     */
+    private function withImages(array $products): array
+    {
+        if ($products === []) {
+            return [];
+        }
+
+        $imagesByProduct = [];
+        foreach ($this->images->allForProducts(
+            array_map(static fn (Product $p): int => $p->id, $products)
+        ) as $row) {
+            $imagesByProduct[$row['product_id']][] = $row;
+        }
+
+        return array_map(
+            static fn (Product $product): array => [
+                ...$product->toArray(),
+                'images' => $imagesByProduct[$product->id] ?? [],
+            ],
+            $products
+        );
+    }
 }

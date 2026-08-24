@@ -61,6 +61,8 @@ $router->get('/api/csrf-token', [CsrfController::class, 'show']);
 
 // --- Public storefront ---
 $router->get('/api/products', [ProductController::class, 'index']);
+$router->get('/api/products/new-arrivals', [ProductController::class, 'newArrivals']);
+$router->get('/api/products/special-offers', [ProductController::class, 'specialOffers']);
 $router->get('/api/products/{slug}', [ProductController::class, 'show']);
 $router->get('/api/categories', [CategoryController::class, 'index']);
 
