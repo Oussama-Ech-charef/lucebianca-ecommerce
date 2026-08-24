@@ -226,7 +226,7 @@ export default function ProductsClient() {
                     <td className="px-4 py-3">
                       <div className="flex gap-2">
                         <Link
-                          href={`/admin/products/${product.id}/edit`}
+                          href={`/admin/products/${product.id}`}
                           className="text-blue-600 hover:underline"
                         >
                           Edit
