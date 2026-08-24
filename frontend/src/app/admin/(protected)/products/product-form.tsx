@@ -5,6 +5,11 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 import type { Product } from "@/lib/types";
+import {
+  adminRequest,
+  clearAdminSession,
+  getAdminSession,
+} from "@/lib/admin";
 
 type Variant = {
   size: string;
@@ -46,16 +51,26 @@ export default function ProductForm({ productId }: ProductFormProps) {
     }
 
     async function fetchProduct() {
-      const token = localStorage.getItem("lucebianca:admin:session:v1");
-      if (!token) return;
+      const session = getAdminSession();
+      if (session === null) {
+        setError("Your session has expired. Please sign in again.");
+        clearAdminSession();
+        router.replace("/admin/login");
+        return;
+      }
 
       try {
-        const response = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/admin/products?page=1&per_page=100`,
-          {
-            headers: { Authorization: `Bearer ${token}` },
-          }
+        const response = await adminRequest(
+          "/api/admin/products?page=1&per_page=100",
+          session,
         );
+
+        if (response.status === 401) {
+          setError("Your session has expired. Please sign in again.");
+          clearAdminSession();
+          router.replace("/admin/login");
+          return;
+        }
 
         if (response.ok) {
           const result: AdminProductsResponse = await response.json();
@@ -78,7 +93,7 @@ export default function ProductForm({ productId }: ProductFormProps) {
     }
 
     fetchProduct();
-  }, [productId]);
+  }, [productId, router]);
 
   function addVariant() {
     setVariants([
@@ -103,9 +118,11 @@ export default function ProductForm({ productId }: ProductFormProps) {
     setError(null);
     setErrors({});
 
-    const token = localStorage.getItem("lucebianca:admin:session:v1");
-    if (!token) {
-      setError("Not authenticated");
+    const session = getAdminSession();
+    if (session === null) {
+      setError("Your session has expired. Please sign in again.");
+      clearAdminSession();
+      router.replace("/admin/login");
       setLoading(false);
       return;
     }
@@ -137,17 +154,20 @@ export default function ProductForm({ productId }: ProductFormProps) {
 
     try {
       const url = isEdit
-        ? `${process.env.NEXT_PUBLIC_API_URL}/api/admin/products/${productId}`
-        : `${process.env.NEXT_PUBLIC_API_URL}/api/admin/products`;
+        ? `/api/admin/products/${productId}`
+        : "/api/admin/products";
 
-      const response = await fetch(url, {
+      const response = await adminRequest(url, session, {
         method: isEdit ? "PUT" : "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
+        body: payload,
       });
+
+      if (response.status === 401) {
+        setError("Your session has expired. Please sign in again.");
+        clearAdminSession();
+        router.replace("/admin/login");
+        return;
+      }
 
       if (response.ok) {
         router.push("/admin/products");

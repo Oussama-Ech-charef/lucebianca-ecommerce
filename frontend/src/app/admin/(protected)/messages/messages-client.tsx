@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+
+import {
+  adminRequest,
+  clearAdminSession,
+  getAdminSession,
+} from "@/lib/admin";
 
 type Message = {
   id: number;
@@ -22,6 +29,7 @@ type MessagesResponse = {
 };
 
 export default function MessagesClient() {
+  const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -29,59 +37,81 @@ export default function MessagesClient() {
   const [meta, setMeta] = useState<MessagesResponse["meta"] | null>(null);
   const [filter, setFilter] = useState<"all" | "unread" | "read">("unread");
 
-  useEffect(() => {
-    fetchMessages(page, filter);
-  }, [page, filter]);
+  const sessionExpired = useCallback(() => {
+    setError("Your session has expired. Please sign in again.");
+    clearAdminSession();
+    router.replace("/admin/login");
+  }, [router]);
 
-  async function fetchMessages(pageNum: number, status: string) {
-    setLoading(true);
-    setError(null);
+  // Bumped by mutation handlers to refetch with the same page/filter.
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // Data loads inline in the effect with state updates confined to promise
+  // continuations (react-hooks/set-state-in-effect). A missing session here
+  // needs no local handling — the admin shell already redirects to login.
+  useEffect(() => {
+    const session = getAdminSession();
+    if (session === null) {
+      // No local handling: the admin shell redirects logged-out admins.
+      return;
+    }
+    let cancelled = false;
+
+    const statusParam = filter === "all" ? "" : `&status=${filter}`;
+    adminRequest(`/api/admin/messages?page=${page}&per_page=20${statusParam}`, session)
+      .then(async (response) => {
+        if (cancelled) return;
+        if (response.status === 401) {
+          sessionExpired();
+          return;
+        }
+        if (!response.ok) {
+          throw new Error("Failed to fetch messages");
+        }
+        const result: MessagesResponse = await response.json();
+        setMessages(result.data);
+        setMeta(result.meta);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load messages");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [page, filter, reloadKey, sessionExpired]);
+
+  async function markAsRead(id: number) {
+    const session = getAdminSession();
+    if (session === null) {
+      clearAdminSession();
+      router.replace("/admin/login");
+      return;
+    }
 
     try {
-      const token = localStorage.getItem("lucebianca:admin:session:v1");
-      if (!token) {
-        setError("Not authenticated");
-        setLoading(false);
+      const response = await adminRequest(
+        `/api/admin/messages/${id}/mark-read`,
+        session,
+        { method: "PUT" },
+      );
+
+      if (response.status === 401) {
+        clearAdminSession();
+        router.replace("/admin/login");
         return;
       }
 
-      const statusParam = status === "all" ? "" : `&status=${status}`;
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/messages?page=${pageNum}&per_page=20${statusParam}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch messages");
-      }
-
-      const result: MessagesResponse = await response.json();
-      setMessages(result.data);
-      setMeta(result.meta);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load messages");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function markAsRead(id: number) {
-    const token = localStorage.getItem("lucebianca:admin:session:v1");
-    if (!token) return;
-
-    try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/messages/${id}/mark-read`,
-        {
-          method: "PUT",
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
-
       if (response.ok) {
-        fetchMessages(page, filter);
+        setReloadKey((key) => key + 1);
       }
     } catch (err) {
       console.error("Failed to mark as read", err);
@@ -91,20 +121,26 @@ export default function MessagesClient() {
   async function deleteMessage(id: number) {
     if (!confirm("Delete this message permanently?")) return;
 
-    const token = localStorage.getItem("lucebianca:admin:session:v1");
-    if (!token) return;
+    const session = getAdminSession();
+    if (session === null) {
+      clearAdminSession();
+      router.replace("/admin/login");
+      return;
+    }
 
     try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/messages/${id}`,
-        {
-          method: "DELETE",
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
+      const response = await adminRequest(`/api/admin/messages/${id}`, session, {
+        method: "DELETE",
+      });
+
+      if (response.status === 401) {
+        clearAdminSession();
+        router.replace("/admin/login");
+        return;
+      }
 
       if (response.ok) {
-        fetchMessages(page, filter);
+        setReloadKey((key) => key + 1);
       }
     } catch (err) {
       console.error("Failed to delete message", err);

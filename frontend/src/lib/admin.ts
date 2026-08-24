@@ -13,7 +13,7 @@
  * short-lived JWT, and a 401 on the orders API clears the session.
  */
 
-import { api } from "@/lib/api";
+import { api, fetchCsrfToken } from "@/lib/api";
 import type {
   AdminAuthPayload,
   AdminOrder,
@@ -25,6 +25,7 @@ import type {
 
 const SESSION_KEY = "lucebianca:admin:session:v1";
 const SESSION_COOKIE = "lb_admin_session";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8090";
 
 export type AdminOrderFilters = {
   page?: number;
@@ -112,7 +113,7 @@ export function fetchAdminOrders(filters: AdminOrderFilters, token: string) {
  * PUT /api/admin/orders/{id} — change an order's status / payment_status.
  * Returns the updated order with full items (same shape as GET /api/orders/{id}).
  */
-export function updateAdminOrder(
+export async function updateAdminOrder(
   id: number,
   fields: { status?: OrderStatus; payment_status?: PaymentStatus },
   token: string,
@@ -121,5 +122,46 @@ export function updateAdminOrder(
     method: "PUT",
     body: fields,
     token,
+    headers: { "X-CSRF-Token": await fetchCsrfToken() },
   });
+}
+
+/**
+ * Raw authenticated admin request. Sends ONLY `session.token` as the Bearer
+ * value (the session payload is a JSON object — sending it whole was the
+ * cause of the admin 401s) and, on every mutating method, a fresh CSRF token
+ * in the X-CSRF-Token header (CsrfMiddleware guards all admin
+ * POST/PUT/DELETE routes). Returns the Response so callers keep their
+ * existing ok/status/errors handling.
+ */
+export async function adminRequest(
+  path: string,
+  session: AdminAuthPayload,
+  init: { method?: "GET" | "POST" | "PUT" | "DELETE"; body?: unknown } = {},
+): Promise<Response> {
+  const method = init.method ?? "GET";
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${session.token}`,
+  };
+  if (init.body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
+  if (method !== "GET") {
+    headers["X-CSRF-Token"] = await fetchCsrfToken();
+  }
+
+  return fetch(`${API_BASE}${path}`, {
+    method,
+    headers,
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+  });
+}
+
+/**
+ * Shared handler for a rejected admin JWT (expired/revoked): clears the
+ * local session + gate cookie. Callers redirect to /admin/login and may
+ * surface a session-expired message.
+ */
+export function handleExpiredAdminSession(): void {
+  clearAdminSession();
 }

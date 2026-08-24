@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+
+import {
+  adminRequest,
+  clearAdminSession,
+  getAdminSession,
+} from "@/lib/admin";
 
 type Review = {
   id: number;
@@ -26,6 +33,7 @@ type ReviewsResponse = {
 };
 
 export default function ReviewsClient() {
+  const router = useRouter();
   const [reviews, setReviews] = useState<Review[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -33,59 +41,87 @@ export default function ReviewsClient() {
   const [meta, setMeta] = useState<ReviewsResponse["meta"] | null>(null);
   const [filter, setFilter] = useState<"all" | "pending" | "approved">("pending");
 
+  const sessionExpired = useCallback(() => {
+    setError("Your session has expired. Please sign in again.");
+    clearAdminSession();
+    router.replace("/admin/login");
+  }, [router]);
+
+  // Bumped by mutation handlers to refetch with the same page/filter.
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // Data loads inline in the effect with state updates confined to promise
+  // continuations (react-hooks/set-state-in-effect). A missing session here
+  // needs no local handling — the admin shell already redirects to login.
   useEffect(() => {
-    fetchReviews(page, filter);
-  }, [page, filter]);
-
-  async function fetchReviews(pageNum: number, status: string) {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const token = localStorage.getItem("lucebianca:admin:session:v1");
-      if (!token) {
-        setError("Not authenticated");
-        setLoading(false);
-        return;
-      }
-
-      const statusParam = status === "all" ? "" : `&status=${status}`;
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/reviews?page=${pageNum}&per_page=20${statusParam}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch reviews");
-      }
-
-      const result: ReviewsResponse = await response.json();
-      setReviews(result.data);
-      setMeta(result.meta);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load reviews");
-    } finally {
-      setLoading(false);
+    const session = getAdminSession();
+    if (session === null) {
+      // No local handling: the admin shell redirects logged-out admins.
+      return;
     }
+    let cancelled = false;
+
+    const statusParam = filter === "all" ? "" : `&status=${filter}`;
+    adminRequest(`/api/admin/reviews?page=${page}&per_page=20${statusParam}`, session)
+      .then(async (response) => {
+        if (cancelled) return;
+        if (response.status === 401) {
+          sessionExpired();
+          return;
+        }
+        if (!response.ok) {
+          throw new Error("Failed to fetch reviews");
+        }
+        const result: ReviewsResponse = await response.json();
+        setReviews(result.data);
+        setMeta(result.meta);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load reviews");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [page, filter, reloadKey, sessionExpired]);
+
+  function requireSession() {
+    const session = getAdminSession();
+    if (session === null) {
+      clearAdminSession();
+      router.replace("/admin/login");
+      return null;
+    }
+    return session;
   }
 
   async function approveReview(id: number) {
-    const token = localStorage.getItem("lucebianca:admin:session:v1");
-    if (!token) return;
+    const session = requireSession();
+    if (session === null) return;
 
     try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/reviews/${id}/approve`,
-        {
-          method: "PUT",
-          headers: { Authorization: `Bearer ${token}` },
-        }
+      const response = await adminRequest(
+        `/api/admin/reviews/${id}/approve`,
+        session,
+        { method: "PUT" },
       );
 
+      if (response.status === 401) {
+        clearAdminSession();
+        router.replace("/admin/login");
+        return;
+      }
+
       if (response.ok) {
-        fetchReviews(page, filter);
+        setReloadKey((key) => key + 1);
       }
     } catch (err) {
       console.error("Failed to approve review", err);
@@ -93,20 +129,24 @@ export default function ReviewsClient() {
   }
 
   async function rejectReview(id: number) {
-    const token = localStorage.getItem("lucebianca:admin:session:v1");
-    if (!token) return;
+    const session = requireSession();
+    if (session === null) return;
 
     try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/reviews/${id}/reject`,
-        {
-          method: "PUT",
-          headers: { Authorization: `Bearer ${token}` },
-        }
+      const response = await adminRequest(
+        `/api/admin/reviews/${id}/reject`,
+        session,
+        { method: "PUT" },
       );
 
+      if (response.status === 401) {
+        clearAdminSession();
+        router.replace("/admin/login");
+        return;
+      }
+
       if (response.ok) {
-        fetchReviews(page, filter);
+        setReloadKey((key) => key + 1);
       }
     } catch (err) {
       console.error("Failed to reject review", err);
@@ -116,20 +156,22 @@ export default function ReviewsClient() {
   async function deleteReview(id: number) {
     if (!confirm("Delete this review permanently?")) return;
 
-    const token = localStorage.getItem("lucebianca:admin:session:v1");
-    if (!token) return;
+    const session = requireSession();
+    if (session === null) return;
 
     try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/reviews/${id}`,
-        {
-          method: "DELETE",
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
+      const response = await adminRequest(`/api/admin/reviews/${id}`, session, {
+        method: "DELETE",
+      });
+
+      if (response.status === 401) {
+        clearAdminSession();
+        router.replace("/admin/login");
+        return;
+      }
 
       if (response.ok) {
-        fetchReviews(page, filter);
+        setReloadKey((key) => key + 1);
       }
     } catch (err) {
       console.error("Failed to delete review", err);

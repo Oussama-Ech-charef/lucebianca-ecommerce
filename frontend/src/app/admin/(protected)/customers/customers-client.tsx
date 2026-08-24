@@ -1,6 +1,13 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+
+import {
+  adminRequest,
+  clearAdminSession,
+  getAdminSession,
+} from "@/lib/admin";
 
 type Customer = {
   id: number;
@@ -22,6 +29,7 @@ type CustomersResponse = {
 };
 
 export default function CustomersClient() {
+  const router = useRouter();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,21 +42,26 @@ export default function CustomersClient() {
       setError(null);
 
       try {
-        const token = localStorage.getItem("lucebianca:admin:session:v1");
-        if (!token) {
-          setError("Not authenticated");
+        const session = getAdminSession();
+        if (session === null) {
+          setError("Your session has expired. Please sign in again.");
+          clearAdminSession();
+          router.replace("/admin/login");
           setLoading(false);
           return;
         }
 
-        const response = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/admin/customers?page=${pageNum}&per_page=20`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          }
+        const response = await adminRequest(
+          `/api/admin/customers?page=${pageNum}&per_page=20`,
+          session,
         );
+
+        if (response.status === 401) {
+          setError("Your session has expired. Please sign in again.");
+          clearAdminSession();
+          router.replace("/admin/login");
+          return;
+        }
 
         if (!response.ok) {
           throw new Error("Failed to fetch customers");
@@ -65,7 +78,7 @@ export default function CustomersClient() {
     }
 
     fetchCustomers(page);
-  }, [page]);
+  }, [page, router]);
 
   if (loading) {
     return (

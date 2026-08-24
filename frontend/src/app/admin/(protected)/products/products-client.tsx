@@ -1,7 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+
+import {
+  adminRequest,
+  clearAdminSession,
+  getAdminSession,
+} from "@/lib/admin";
 
 type Product = {
   id: number;
@@ -24,70 +31,90 @@ type ProductsResponse = {
 };
 
 export default function ProductsClient() {
+  const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [meta, setMeta] = useState<ProductsResponse["meta"] | null>(null);
 
-  useEffect(() => {
-    fetchProducts(page);
-  }, [page]);
+  const sessionExpired = useCallback(() => {
+    setError("Your session has expired. Please sign in again.");
+    clearAdminSession();
+    router.replace("/admin/login");
+  }, [router]);
 
-  async function fetchProducts(pageNum: number) {
-    setLoading(true);
-    setError(null);
+  // Bumped by mutation handlers to refetch with the same page.
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // Data loads inline in the effect with state updates confined to promise
+  // continuations (react-hooks/set-state-in-effect). A missing session here
+  // needs no local handling — the admin shell already redirects to login.
+  useEffect(() => {
+    const session = getAdminSession();
+    if (session === null) {
+      // No local handling: the admin shell redirects logged-out admins.
+      return;
+    }
+    let cancelled = false;
+
+    adminRequest(`/api/admin/products?page=${page}&per_page=20`, session)
+      .then(async (response) => {
+        if (cancelled) return;
+        if (response.status === 401) {
+          sessionExpired();
+          return;
+        }
+        if (!response.ok) {
+          throw new Error("Failed to fetch products");
+        }
+        const result: ProductsResponse = await response.json();
+        setProducts(result.data);
+        setMeta(result.meta);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load products");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [page, reloadKey, sessionExpired]);
+
+  async function toggleActive(productId: number, currentStatus: number) {
+    const session = getAdminSession();
+    if (session === null) {
+      clearAdminSession();
+      router.replace("/admin/login");
+      return;
+    }
 
     try {
-      const token = localStorage.getItem("lucebianca:admin:session:v1");
-      if (!token) {
-        setError("Not authenticated");
-        setLoading(false);
+      const response = await adminRequest(
+        `/api/admin/products/${productId}`,
+        session,
+        {
+          method: "PUT",
+          body: { is_active: currentStatus === 1 ? 0 : 1 },
+        },
+      );
+
+      if (response.status === 401) {
+        clearAdminSession();
+        router.replace("/admin/login");
         return;
       }
 
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/products?page=${pageNum}&per_page=20`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch products");
-      }
-
-      const result: ProductsResponse = await response.json();
-      setProducts(result.data);
-      setMeta(result.meta);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load products");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function toggleActive(productId: number, currentStatus: number) {
-    const token = localStorage.getItem("lucebianca:admin:session:v1");
-    if (!token) return;
-
-    try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/products/${productId}`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ is_active: currentStatus === 1 ? 0 : 1 }),
-        }
-      );
-
       if (response.ok) {
-        fetchProducts(page);
+        setReloadKey((key) => key + 1);
       }
     } catch (err) {
       console.error("Failed to toggle product status", err);
@@ -99,22 +126,28 @@ export default function ProductsClient() {
       return;
     }
 
-    const token = localStorage.getItem("lucebianca:admin:session:v1");
-    if (!token) return;
+    const session = getAdminSession();
+    if (session === null) {
+      clearAdminSession();
+      router.replace("/admin/login");
+      return;
+    }
 
     try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/products/${productId}`,
-        {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
+      const response = await adminRequest(
+        `/api/admin/products/${productId}`,
+        session,
+        { method: "DELETE" },
       );
 
+      if (response.status === 401) {
+        clearAdminSession();
+        router.replace("/admin/login");
+        return;
+      }
+
       if (response.ok) {
-        fetchProducts(page);
+        setReloadKey((key) => key + 1);
       } else if (response.status === 409) {
         alert(
           "This product has been ordered and cannot be deleted. Deactivate it instead."

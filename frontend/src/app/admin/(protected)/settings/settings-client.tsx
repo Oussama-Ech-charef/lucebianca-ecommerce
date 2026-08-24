@@ -1,10 +1,18 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+
+import {
+  adminRequest,
+  clearAdminSession,
+  getAdminSession,
+} from "@/lib/admin";
 
 type Settings = Record<string, string>;
 
 export default function SettingsClient() {
+  const router = useRouter();
   const [settings, setSettings] = useState<Settings>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -18,19 +26,23 @@ export default function SettingsClient() {
       setError(null);
 
       try {
-        const token = localStorage.getItem("lucebianca:admin:session:v1");
-        if (!token) {
-          setError("Not authenticated");
+        const session = getAdminSession();
+        if (session === null) {
+          setError("Your session has expired. Please sign in again.");
+          clearAdminSession();
+          router.replace("/admin/login");
           setLoading(false);
           return;
         }
 
-        const response = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/admin/settings`,
-          {
-            headers: { Authorization: `Bearer ${token}` },
-          }
-        );
+        const response = await adminRequest("/api/admin/settings", session);
+
+        if (response.status === 401) {
+          setError("Your session has expired. Please sign in again.");
+          clearAdminSession();
+          router.replace("/admin/login");
+          return;
+        }
 
         if (!response.ok) {
           throw new Error("Failed to fetch settings");
@@ -46,7 +58,7 @@ export default function SettingsClient() {
     }
 
     fetchSettings();
-  }, []);
+  }, [router]);
 
   function updateSetting(key: string, value: string) {
     setSettings((prev) => ({ ...prev, [key]: value }));
@@ -58,24 +70,26 @@ export default function SettingsClient() {
     setSuccess(false);
 
     try {
-      const token = localStorage.getItem("lucebianca:admin:session:v1");
-      if (!token) {
-        setError("Not authenticated");
+      const session = getAdminSession();
+      if (session === null) {
+        setError("Your session has expired. Please sign in again.");
+        clearAdminSession();
+        router.replace("/admin/login");
         setSaving(false);
         return;
       }
 
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/settings`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify(settings),
-        }
-      );
+      const response = await adminRequest("/api/admin/settings", session, {
+        method: "PUT",
+        body: settings,
+      });
+
+      if (response.status === 401) {
+        setError("Your session has expired. Please sign in again.");
+        clearAdminSession();
+        router.replace("/admin/login");
+        return;
+      }
 
       if (response.ok) {
         setSuccess(true);

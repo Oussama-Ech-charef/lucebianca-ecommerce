@@ -1,6 +1,13 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+
+import {
+  adminRequest,
+  clearAdminSession,
+  getAdminSession,
+} from "@/lib/admin";
 
 type Category = {
   id: number;
@@ -10,6 +17,7 @@ type Category = {
 };
 
 export default function CategoriesClient() {
+  const router = useRouter();
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -19,8 +27,16 @@ export default function CategoriesClient() {
   const [slug, setSlug] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // The admin JWT was rejected — end the session and return to login.
+  function handleSessionExpired() {
+    setError("Your session has expired. Please sign in again.");
+    clearAdminSession();
+    router.replace("/admin/login");
+  }
+
   useEffect(() => {
     fetchCategories();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function fetchCategories() {
@@ -28,20 +44,19 @@ export default function CategoriesClient() {
     setError(null);
 
     try {
-      const token = localStorage.getItem("lucebianca:admin:session:v1");
-      if (!token) {
-        setError("Not authenticated");
+      const session = getAdminSession();
+      if (session === null) {
+        handleSessionExpired();
         setLoading(false);
         return;
       }
 
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/categories`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
+      const response = await adminRequest("/api/admin/categories", session);
 
+      if (response.status === 401) {
+        handleSessionExpired();
+        return;
+      }
       if (!response.ok) {
         throw new Error("Failed to fetch categories");
       }
@@ -80,22 +95,27 @@ export default function CategoriesClient() {
     e.preventDefault();
     setSubmitting(true);
 
-    const token = localStorage.getItem("lucebianca:admin:session:v1");
-    if (!token) return;
+    const session = getAdminSession();
+    if (session === null) {
+      handleSessionExpired();
+      setSubmitting(false);
+      return;
+    }
 
     try {
       const url = editId
-        ? `${process.env.NEXT_PUBLIC_API_URL}/api/admin/categories/${editId}`
-        : `${process.env.NEXT_PUBLIC_API_URL}/api/admin/categories`;
+        ? `/api/admin/categories/${editId}`
+        : "/api/admin/categories";
 
-      const response = await fetch(url, {
+      const response = await adminRequest(url, session, {
         method: editId ? "PUT" : "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ name, slug: slug || undefined }),
+        body: { name, slug: slug || undefined },
       });
+
+      if (response.status === 401) {
+        handleSessionExpired();
+        return;
+      }
 
       if (response.ok) {
         cancelForm();
@@ -115,17 +135,21 @@ export default function CategoriesClient() {
       return;
     }
 
-    const token = localStorage.getItem("lucebianca:admin:session:v1");
-    if (!token) return;
+    const session = getAdminSession();
+    if (session === null) {
+      handleSessionExpired();
+      return;
+    }
 
     try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/admin/categories/${id}`,
-        {
-          method: "DELETE",
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
+      const response = await adminRequest(`/api/admin/categories/${id}`, session, {
+        method: "DELETE",
+      });
+
+      if (response.status === 401) {
+        handleSessionExpired();
+        return;
+      }
 
       if (response.ok) {
         fetchCategories();
