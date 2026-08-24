@@ -18,6 +18,7 @@ import type {
 
 export type ProductFilters = {
   page?: string;
+  per_page?: string;
   category?: string;
   size?: string;
   color?: string;
@@ -80,6 +81,16 @@ export function fetchProductDetail(slug: string) {
 /** GET /api/categories — drives the shop's category filter. */
 export function fetchCategories() {
   return api<CategoriesResponse>("/api/categories");
+}
+
+/** GET /api/products/new-arrivals — newest active products for homepage. */
+export function fetchNewArrivals(limit = 8) {
+  return api<{ data: ShopProduct[] }>(`/api/products/new-arrivals?limit=${limit}`);
+}
+
+/** GET /api/products/special-offers — active products with valid sale_price. */
+export function fetchSpecialOffers(limit = 8) {
+  return api<{ data: ShopProduct[] }>(`/api/products/special-offers?limit=${limit}`);
 }
 
 /**

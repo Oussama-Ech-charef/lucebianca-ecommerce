@@ -10,16 +10,22 @@ import type { Variant } from "@/lib/types";
 /**
  * Size + color selection driven entirely by the API's variant list. Adds the
  * chosen variant to the client-side cart (phase 7).
+ *
+ * If the product has a valid sale_price (sale_price > 0 and < base_price),
+ * that price is used as the effective price for all variants (variant prices
+ * are ignored). This matches the backend pricing logic.
  */
 export default function VariantSelector({
   variants,
   basePrice,
+  salePrice,
   productName,
   productSlug,
   mainImage,
 }: {
   variants: Variant[];
   basePrice: string;
+  salePrice?: string | null;
   productName: string;
   productSlug: string;
   mainImage: string | null;
@@ -58,7 +64,8 @@ export default function VariantSelector({
     [variants, size, color],
   );
 
-  const price = selected?.price ?? basePrice;
+  const hasSalePrice = salePrice !== null && salePrice !== "" && Number(salePrice) > 0 && Number(salePrice) < Number(basePrice);
+  const effectivePrice = hasSalePrice ? salePrice! : (selected?.price ?? basePrice);
   const anyInStock = variants.some((variant) => variant.stock_quantity > 0);
   const inStock = selected ? selected.stock_quantity > 0 : anyInStock;
 
@@ -80,6 +87,10 @@ export default function VariantSelector({
     if (!selected) {
       return;
     }
+    // Use sale price if available, otherwise variant price, then base price
+    const unitPrice = Number(
+      hasSalePrice ? salePrice : (selected.price ?? basePrice)
+    );
     addItem(
       {
         variant_id: selected.id,
@@ -90,7 +101,7 @@ export default function VariantSelector({
         size: selected.size,
         color: selected.color,
         sku: selected.sku,
-        unit_price: Number(selected.price ?? basePrice),
+        unit_price: unitPrice,
         stock_quantity: selected.stock_quantity,
       },
       1,
@@ -110,7 +121,16 @@ export default function VariantSelector({
       <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">
         Price
       </p>
-      <p className="mt-1 font-serif text-3xl">{formatPrice(price)}</p>
+      <div className="mt-1 flex items-baseline gap-2">
+        <p className="font-serif text-3xl">
+          {formatPrice(effectivePrice)}
+        </p>
+        {salePrice && salePrice !== "" && Number(salePrice) > 0 && Number(salePrice) < Number(basePrice) && (
+          <span className="text-neutral-400 line-through text-lg">
+            {formatPrice(basePrice)}
+          </span>
+        )}
+      </div>
 
       {variants.length === 0 ? (
         <p className="mt-4 text-sm text-neutral-500">

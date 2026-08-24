@@ -16,6 +16,7 @@ export type Product = {
   slug: string;
   description: string | null;
   base_price: string;
+  sale_price: string | null;
   category_id: number | null;
   is_active: number;
   meta_title: string | null;
@@ -174,6 +175,16 @@ export type WishlistItem = {
 };
 
 /** Payload of POST /api/wishlist (`added` false = was already saved). */
+export type ProductFilters = {
+  page?: string;
+  per_page?: string;
+  category?: string;
+  size?: string;
+  color?: string;
+  min_price?: string;
+  max_price?: string;
+};
+
 export type WishlistMutation = {
   added: boolean;
   message: string;

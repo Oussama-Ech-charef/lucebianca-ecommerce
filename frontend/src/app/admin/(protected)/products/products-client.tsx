@@ -15,6 +15,7 @@ type Product = {
   name: string;
   slug: string;
   base_price: string;
+  sale_price: string | null;
   is_active: number;
   category_id: number | null;
   created_at: string;
@@ -211,7 +212,16 @@ export default function ProductsClient() {
                         </p>
                       </div>
                     </td>
-                    <td className="px-4 py-3">{product.base_price} MAD</td>
+                    <td className="px-4 py-3">
+                      {product.sale_price && product.sale_price !== "" && Number(product.sale_price) > 0 && Number(product.sale_price) < Number(product.base_price) ? (
+                        <>
+                          <span className="font-medium text-red-600">{product.sale_price} MAD</span>
+                          <span className="block text-neutral-400 line-through text-sm">{product.base_price} MAD</span>
+                        </>
+                      ) : (
+                        <span>{product.base_price} MAD</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <span
                         className={`inline-block rounded px-2 py-1 text-xs font-medium ${

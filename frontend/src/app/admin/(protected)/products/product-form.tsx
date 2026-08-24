@@ -35,6 +35,7 @@ export default function ProductForm({ productId }: ProductFormProps) {
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
   const [basePrice, setBasePrice] = useState("");
+  const [salePrice, setSalePrice] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [isActive, setIsActive] = useState(true);
   const [metaTitle, setMetaTitle] = useState("");
@@ -81,6 +82,7 @@ export default function ProductForm({ productId }: ProductFormProps) {
             setSlug(product.slug || "");
             setDescription(product.description || "");
             setBasePrice(product.base_price || "");
+            setSalePrice(product.sale_price || "");
             setCategoryId(product.category_id?.toString() || "");
             setIsActive(product.is_active === 1);
             setMetaTitle(product.meta_title || "");
@@ -132,6 +134,7 @@ export default function ProductForm({ productId }: ProductFormProps) {
       slug?: string;
       description: string | null;
       base_price: string;
+      sale_price: string | null;
       category_id: string | null;
       is_active: 0 | 1;
       meta_title: string;
@@ -142,6 +145,7 @@ export default function ProductForm({ productId }: ProductFormProps) {
       slug: slug || undefined,
       description: description || null,
       base_price: basePrice,
+      sale_price: salePrice || null,
       category_id: categoryId || null,
       is_active: isActive ? 1 : 0,
       meta_title: metaTitle,
@@ -274,17 +278,37 @@ export default function ProductForm({ productId }: ProductFormProps) {
           </div>
 
           <div>
-            <label htmlFor="category_id" className={labelClass}>
-              Category ID (optional)
+            <label htmlFor="sale_price" className={labelClass}>
+              Sale Price (MAD) <span className="text-neutral-400 text-sm">(optional)</span>
             </label>
             <input
-              id="category_id"
+              id="sale_price"
               type="text"
-              value={categoryId}
-              onChange={(e) => setCategoryId(e.target.value)}
+              value={salePrice}
+              onChange={(e) => setSalePrice(e.target.value)}
               className={inputClass}
+              placeholder="Must be less than base price"
             />
+            {errors.sale_price && (
+              <p className="mt-1 text-xs text-red-600">{errors.sale_price}</p>
+            )}
+            <p className="mt-1 text-xs text-neutral-500">
+              Must be greater than 0 and less than base price
+            </p>
           </div>
+        </div>
+
+        <div>
+          <label htmlFor="category_id" className={labelClass}>
+            Category ID (optional)
+          </label>
+          <input
+            id="category_id"
+            type="text"
+            value={categoryId}
+            onChange={(e) => setCategoryId(e.target.value)}
+            className={inputClass}
+          />
         </div>
 
         <div>

@@ -17,13 +17,10 @@ import ProductReviews from "./reviews";
 
 type PageProps = { params: Promise<{ slug: string }> };
 
-// Dynamic rendering (spec 3.2 trade-off, revised): product detail must honor
-// admin activation changes immediately — a deactivated product has to return
-// the not-found experience on its very next direct visit, which the previous
-// 1-hour ISR window could not guarantee. The fetch below is no-store and the
-// route renders per request; React cache() still dedupes the shared getProduct
-// call between generateMetadata and the page so the API is hit once per
-// request. Catalog/listing caching is unaffected.
+// Dynamic rendering: product detail must honor admin activation changes
+// immediately. The fetch below is no-store and the route renders per request.
+// React cache() still dedupes the shared getProduct call between
+// generateMetadata and the page so the API is hit once per request.
 export const dynamic = "force-dynamic";
 
 // Shared by generateMetadata and the page so the API is hit once per request.
@@ -48,10 +45,12 @@ function productMainImage(product: ProductDetail): string | null {
 }
 
 function productLowPrice(product: ProductDetail): number {
-  const prices = product.variants
+  const hasSalePrice = product.sale_price && product.sale_price !== "";
+  const basePrice = hasSalePrice ? Number(product.sale_price) : Number(product.base_price);
+  const variantPrices = product.variants
     .map((variant) => Number(variant.price ?? product.base_price))
     .filter((value) => Number.isFinite(value));
-  return prices.length > 0 ? Math.min(...prices) : Number(product.base_price);
+  return variantPrices.length > 0 ? Math.min(...variantPrices) : basePrice;
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -62,8 +61,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     return { title: "Product not found" };
   }
 
-  const description =
-    product.meta_description ?? product.description ?? undefined;
+  const description = product.meta_description ?? product.description ?? undefined;
   const mainImage = productMainImage(product);
   const priceLine = `From ${formatPrice(productLowPrice(product))}`;
   const ogDescription = description
@@ -81,8 +79,6 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       title: product.meta_title ?? product.name,
       description: ogDescription,
       url: `${SITE_URL}/product/${product.slug}`,
-      // Product image when present; otherwise the root logo fallback
-      // (OG_IMAGE) — a child openGraph does not inherit the layout's image.
       images: mainImage
         ? [{ url: mainImage, alt: product.name }]
         : [OG_IMAGE],
@@ -104,18 +100,29 @@ export default async function ProductPage({ params }: PageProps) {
     notFound();
   }
 
-  const prices = product.variants
+  const hasSalePrice = product.sale_price && product.sale_price !== "";
+  const salePriceValue = hasSalePrice ? Number(product.sale_price!) : null;
+
+  const variantPrices = product.variants
     .map((variant) => Number(variant.price ?? product.base_price))
     .filter((value) => Number.isFinite(value));
-  const lowPrice = prices.length > 0 ? Math.min(...prices) : Number(product.base_price);
-  const highPrice = prices.length > 0 ? Math.max(...prices) : Number(product.base_price);
+
+  const lowPrice = hasSalePrice
+    ? Number(product.sale_price!)
+    : (variantPrices.length > 0 ? Math.min(...variantPrices) : Number(product.base_price));
+  const highPrice = hasSalePrice
+    ? Number(product.sale_price!)
+    : (variantPrices.length > 0 ? Math.max(...variantPrices) : Number(product.base_price));
+
   const inStock =
     product.variants.length === 0 ||
     product.variants.some((variant) => variant.stock_quantity > 0);
 
   const mainImage = productMainImage(product);
 
-  const jsonLd = {
+  const jsonLd: Record<string, unknown> & {
+    offers: Record<string, unknown> & { priceSpecification?: Record<string, unknown> };
+  } = {
     "@context": "https://schema.org",
     "@type": "Product",
     name: product.name,
@@ -133,6 +140,13 @@ export default async function ProductPage({ params }: PageProps) {
         : "https://schema.org/OutOfStock",
     },
   };
+  if (hasSalePrice && salePriceValue !== null) {
+    jsonLd.offers.priceSpecification = {
+      "@type": "PriceSpecification",
+      price: salePriceValue.toFixed(2),
+      priceCurrency: "MAD",
+    };
+  }
 
   const breadcrumbLd = {
     "@context": "https://schema.org",
@@ -193,6 +207,7 @@ export default async function ProductPage({ params }: PageProps) {
             <VariantSelector
               variants={product.variants}
               basePrice={product.base_price}
+              salePrice={product.sale_price}
               productName={product.name}
               productSlug={product.slug}
               mainImage={mainImage}
@@ -211,10 +226,26 @@ export default async function ProductPage({ params }: PageProps) {
           ) : null}
 
           {product.variants.length > 0 ? (
-            <p className="mt-8 text-xs text-neutral-400">
-              From {formatPrice(lowPrice)} · {product.variants.length}{" "}
-              {product.variants.length === 1 ? "option" : "options"}
-            </p>
+            <div className="mt-8 flex flex-wrap items-center gap-2">
+              {product.sale_price && product.sale_price !== "" ? (
+                <>
+                  <span className="font-serif text-lg font-medium text-red-600">
+                    {formatPrice(product.sale_price)}
+                  </span>
+                  <span className="text-neutral-400 line-through text-sm">
+                    {formatPrice(product.base_price)}
+                  </span>
+                </>
+              ) : (
+                <span className="font-serif text-lg font-medium">
+                  From {formatPrice(lowPrice)}
+                </span>
+              )}
+              <span className="text-xs text-neutral-400 ml-2">
+                · {product.variants.length}{" "}
+                {product.variants.length === 1 ? "option" : "options"}
+              </span>
+            </div>
           ) : null}
         </div>
       </div>
