@@ -66,14 +66,14 @@ export function fetchProducts(filters: ProductFilters) {
  * GET /api/products/{slug} — full detail with variants and images.
  * Throws ApiError(404) when the product is paused or missing.
  *
- * ISR (spec 3.2): the page is revalidated hourly, so this fetch is cached for
- * 3600s server-side to match the route's `revalidate`; a paused product or a
- * price change surfaces within an hour instead of requiring a rebuild.
+ * Always fresh (no-store): the detail route is force-dynamic so an admin
+ * deactivating a product takes effect on the very next direct visit instead
+ * of after an ISR window. Catalog/listing caching elsewhere is unaffected.
  */
 export function fetchProductDetail(slug: string) {
   return api<{ data: ProductDetail }>(
     `/api/products/${encodeURIComponent(slug)}`,
-    { next: { revalidate: 3600 } },
+    { cache: "no-store" },
   );
 }
 

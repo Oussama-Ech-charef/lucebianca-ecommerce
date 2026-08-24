@@ -1,13 +1,25 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ApiError, api, fetchCsrfToken } from "@/lib/api";
-import { getCustomerSession } from "@/lib/customer-auth";
-import type { ProductDetail } from "@/lib/types";
+import { useCustomerSession } from "@/lib/customer-auth";
+
+type ReviewItem = {
+  id: number;
+  rating: number;
+  comment: string | null;
+  created_at: string;
+  user_name: string | null;
+};
+
+type ProductReviewsPayload = {
+  reviews: ReviewItem[];
+  average_rating: number | null;
+};
 
 interface Props {
-  product: ProductDetail;
+  slug: string;
 }
 
 function StarRating({ rating, size = "text-lg" }: { rating: number; size?: string }) {
@@ -30,7 +42,20 @@ function StarRating({ rating, size = "text-lg" }: { rating: number; size?: strin
   );
 }
 
-export default function ProductReviews({ product }: Props) {
+/**
+ * Customer reviews section for the product page.
+ *
+ * The surrounding page is ISR-cached (revalidate = 3600) so price/stock stay
+ * fast and SEO-friendly — but that cache would hide freshly approved reviews
+ * for up to an hour. This section therefore fetches its own data live from
+ * the existing public endpoint on every mount (browser request, no Next
+ * cache), so approvals become visible on the customer's next view while the
+ * cached page shell is untouched.
+ */
+export default function ProductReviews({ slug }: Props) {
+  const [reviews, setReviews] = useState<ReviewItem[] | null>(null);
+  const [averageRating, setAverageRating] = useState(0);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState("");
@@ -38,7 +63,36 @@ export default function ProductReviews({ product }: Props) {
   const [success, setSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const token = getCustomerSession()?.token;
+  // Reactive session: server render and the client's hydration pass both see
+  // null (getServerSnapshot), so the first markup matches everywhere; the
+  // signed-in button appears on the post-hydration re-render.
+  const token = useCustomerSession()?.token ?? null;
+
+  // Live reviews + average rating. Re-run after a successful submit? Not
+  // needed: submissions await admin approval, so the list cannot change yet.
+  useEffect(() => {
+    let cancelled = false;
+
+    api<{ data: ProductReviewsPayload }>(
+      `/api/products/${encodeURIComponent(slug)}`,
+    )
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+        setReviews(response.data.reviews ?? []);
+        setAverageRating(Math.round(Number(response.data.average_rating ?? 0)));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLoadFailed(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [slug]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -51,10 +105,10 @@ export default function ProductReviews({ product }: Props) {
       // sent back in the X-CSRF-Token header on the POST.
       const csrfToken = await fetchCsrfToken();
       await api<{ data: { id: number; message: string } }>(
-        `/api/products/${encodeURIComponent(product.slug)}/reviews`,
+        `/api/products/${encodeURIComponent(slug)}/reviews`,
         {
           method: "POST",
-          token,
+          token: token ?? undefined,
           headers: { "X-CSRF-Token": csrfToken },
           body: { rating, comment },
         },
@@ -73,8 +127,7 @@ export default function ProductReviews({ product }: Props) {
     }
   }
 
-  const hasReviews = product.reviews && product.reviews.length > 0;
-  const averageRating = product.average_rating ?? 0;
+  const hasReviews = reviews !== null && reviews.length > 0;
 
   return (
     <section className="mt-12 border-t border-neutral-200 pt-10">
@@ -82,12 +135,22 @@ export default function ProductReviews({ product }: Props) {
 
       {/* Average Rating */}
       <div className="mt-4 flex items-center gap-4">
-        <StarRating rating={Math.round(averageRating)} size="text-2xl" />
-        <span className="text-sm text-neutral-600">
-          {hasReviews
-            ? `${product.reviews.length} ${product.reviews.length === 1 ? "review" : "reviews"}`
-            : "No reviews yet"}
-        </span>
+        {reviews === null && !loadFailed ? (
+          <p className="text-sm text-neutral-500">Loading reviews…</p>
+        ) : loadFailed ? (
+          <p className="text-sm text-neutral-500">
+            Reviews are unavailable right now.
+          </p>
+        ) : (
+          <>
+            <StarRating rating={averageRating} size="text-2xl" />
+            <span className="text-sm text-neutral-600">
+              {hasReviews
+                ? `${reviews.length} ${reviews.length === 1 ? "review" : "reviews"}`
+                : "No reviews yet"}
+            </span>
+          </>
+        )}
       </div>
 
       {/* Write Review Button */}
@@ -168,7 +231,7 @@ export default function ProductReviews({ product }: Props) {
       {/* Reviews List */}
       {hasReviews && (
         <div className="mt-8 space-y-6">
-          {product.reviews.map((review) => (
+          {reviews.map((review) => (
             <div key={review.id} className="rounded-lg border border-neutral-200 p-4">
               <div className="flex items-center justify-between">
                 <StarRating rating={review.rating} />

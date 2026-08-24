@@ -7,7 +7,6 @@ import { ApiError } from "@/lib/api";
 import { OG_IMAGE, SITE_URL } from "@/lib/site";
 import {
   fetchProductDetail,
-  fetchProducts,
   formatPrice,
 } from "@/lib/storefront";
 import type { ProductDetail } from "@/lib/types";
@@ -18,29 +17,14 @@ import ProductReviews from "./reviews";
 
 type PageProps = { params: Promise<{ slug: string }> };
 
-// ISR (spec 3.2: product pages stay fast and SEO-friendly). generateStaticParams
-// prerenders every active product at build; the page is then cached for up to
-// an hour and the first request after the window re-generates it in the
-// background (stale-while-revalidate), so a paused product or price change
-// surfaces within an hour without a rebuild. Unknown slugs are generated
-// on-demand (dynamicParams defaults to true). No conflict with generateMetadata
-// / cache() below — generateMetadata runs within the same cached render and
-// cache() only dedupes in-request fetches.
-export const revalidate = 3600;
-
-export async function generateStaticParams(): Promise<{ slug: string }[]> {
-  const slugs = new Set<string>();
-  let page = 1;
-  while (true) {
-    const response = await fetchProducts({ page: String(page) });
-    response.data.forEach((product) => slugs.add(product.slug));
-    if (page >= response.meta.pages) {
-      break;
-    }
-    page += 1;
-  }
-  return [...slugs].map((slug) => ({ slug }));
-}
+// Dynamic rendering (spec 3.2 trade-off, revised): product detail must honor
+// admin activation changes immediately — a deactivated product has to return
+// the not-found experience on its very next direct visit, which the previous
+// 1-hour ISR window could not guarantee. The fetch below is no-store and the
+// route renders per request; React cache() still dedupes the shared getProduct
+// call between generateMetadata and the page so the API is hit once per
+// request. Catalog/listing caching is unaffected.
+export const dynamic = "force-dynamic";
 
 // Shared by generateMetadata and the page so the API is hit once per request.
 const getProduct = cache(async (slug: string): Promise<ProductDetail | null> => {
@@ -236,8 +220,10 @@ export default async function ProductPage({ params }: PageProps) {
       </div>
 
       {/* Customer Reviews — always rendered (shows the write-review form
-          and an empty state for products with no approved reviews yet) */}
-      <ProductReviews product={product} />
+          and an empty state for products with no approved reviews yet).
+          The section self-fetches live data so approvals show up on the
+          next view instead of waiting out this page's 1 h ISR window. */}
+      <ProductReviews slug={product.slug} />
     </main>
   );
 }

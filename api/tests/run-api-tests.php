@@ -419,6 +419,19 @@ $csrfRev = ['X-CSRF-Token' => $csrfR['csrf_token'] ?? ''];
 
 [$status, , $body] = httpRequest('POST', '/api/products/test-tee/reviews', ['rating' => 5, 'comment' => 'Lovely tee'], $bearer + $csrfRev);
 check($status === 201 && isset($body['data']['id']), 'review submit -> 201 with id');
+$reviewId = (int) ($body['data']['id'] ?? 0);
+
+// Public detail returns approved reviews only — a pending one stays hidden.
+[, , $pendingDetail] = httpRequest('GET', '/api/products/test-tee');
+check(
+    $reviewId > 0
+        && !in_array(
+            $reviewId,
+            array_column($pendingDetail['data']['reviews'] ?? [], 'id'),
+            true,
+        ),
+    'pending review is hidden from public product detail'
+);
 
 [$status, ] = httpRequest('POST', '/api/products/test-tee/reviews', ['rating' => 9], $bearer + $csrfRev);
 check($status === 422, 'review rating out of range -> 422');
@@ -551,6 +564,19 @@ check($status === 409, 'category update to another category slug -> 409');
 
 [$status, , $renamed] = httpRequest('PUT', "/api/admin/categories/{$category2Id}", ['slug' => 't-shirts'], $adminToken + $csrfAdm);
 check($status === 200 && ($renamed['data']['slug'] ?? '') === 't-shirts', 'category update to free slug -> 200');
+
+// Approving a review must make it (and its rating) visible on the public
+// product detail payload — the storefront renders this section live.
+[$status] = httpRequest('PUT', "/api/admin/reviews/{$reviewId}/approve", null, $adminToken + $csrfAdm);
+check($status === 200, 'admin approves pending review -> 200');
+
+[, , $approvedDetail] = httpRequest('GET', '/api/products/test-tee');
+$visibleReviewIds = array_column($approvedDetail['data']['reviews'] ?? [], 'id');
+check(
+    in_array($reviewId, $visibleReviewIds, true)
+        && abs((float) ($approvedDetail['data']['average_rating'] ?? 0) - 5) < 0.001,
+    'approved review + average rating appear on public product detail'
+);
 
 // --- Error-response safety ------------------------------------------------
 [, , $nf] = httpRequest('GET', '/api/nonexistent-route');
