@@ -145,16 +145,24 @@ export function placeOrder(
  * POST /api/contact — submits the /contact form message. Returns 201 with the
  * stored row's id; throws ApiError(422) with per-field errors on bad input.
  * Includes honeypot field (website) for bot detection — real users never fill it.
+ * When a customer token is provided, the server derives identity from the
+ * verified token and ignores client-supplied name/email.
  */
-export function submitContactMessage(payload: {
-  name: string;
-  email: string;
-  message: string;
-  website: string;
-}) {
+export async function submitContactMessage(
+  payload: {
+    name: string;
+    email: string;
+    message: string;
+    website: string;
+  },
+  token?: string,
+) {
+  const csrfToken = await fetchCsrfToken();
   return api<{ data: { id: number } }>("/api/contact", {
     method: "POST",
+    headers: { "X-CSRF-Token": csrfToken },
     body: payload,
+    ...(token ? { token } : {}),
   });
 }
 

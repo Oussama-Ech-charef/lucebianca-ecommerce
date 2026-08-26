@@ -2,9 +2,11 @@
 
 namespace App\Controllers;
 
+use App\Core\Auth;
 use App\Core\Request;
 use App\Core\Validator;
 use App\Repositories\ContactMessageRepository;
+use App\Repositories\UserRepository;
 
 /**
  * ContactController — /contact form submissions.
@@ -37,8 +39,6 @@ final class ContactController extends Controller
      */
     public function store(Request $request): never
     {
-        $name    = trim((string) $request->input('name', ''));
-        $email   = trim((string) $request->input('email', ''));
         $message = trim((string) $request->input('message', ''));
         $website = trim((string) $request->input('website', ''));
 
@@ -50,17 +50,53 @@ final class ContactController extends Controller
             ]]);
         }
 
-        $errors = Validator::validate(
-            ['name' => $name, 'email' => $email, 'message' => $message],
-            [
-                'name'    => ['required', ['min', 2]],
-                'email'   => ['required', 'email'],
-                'message' => ['required', ['min', self::MESSAGE_MIN_LENGTH]],
-            ]
-        );
+        // Detect authenticated customer — derive identity from verified token,
+        // never trust client-supplied name/email when a valid session exists.
+        $authenticatedUser = null;
+        $token = $request->bearerToken();
+        if ($token !== null) {
+            try {
+                $claims = Auth::verify($token);
+                if (($claims['role'] ?? '') === 'user' && isset($claims['sub'])) {
+                    $userRepo = new UserRepository();
+                    $user = $userRepo->findById((int) $claims['sub']);
+                    if ($user !== null) {
+                        $authenticatedUser = $user;
+                    }
+                }
+            } catch (\RuntimeException) {
+                // Invalid/expired token — fall through to guest handling
+            }
+        }
 
-        if ($errors !== []) {
-            $this->error('Validation failed.', 422, ['errors' => $errors]);
+        if ($authenticatedUser !== null) {
+            $name  = $authenticatedUser->name;
+            $email = $authenticatedUser->email;
+
+            $errors = Validator::validate(
+                ['message' => $message],
+                ['message' => ['required', ['min', self::MESSAGE_MIN_LENGTH]]]
+            );
+
+            if ($errors !== []) {
+                $this->error('Validation failed.', 422, ['errors' => $errors]);
+            }
+        } else {
+            $name  = trim((string) $request->input('name', ''));
+            $email = trim((string) $request->input('email', ''));
+
+            $errors = Validator::validate(
+                ['name' => $name, 'email' => $email, 'message' => $message],
+                [
+                    'name'    => ['required', ['min', 2]],
+                    'email'   => ['required', 'email'],
+                    'message' => ['required', ['min', self::MESSAGE_MIN_LENGTH]],
+                ]
+            );
+
+            if ($errors !== []) {
+                $this->error('Validation failed.', 422, ['errors' => $errors]);
+            }
         }
 
         $id = $this->messages->create($name, $email, $message);

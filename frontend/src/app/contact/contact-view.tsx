@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 
 import { submitContactMessage } from "@/lib/storefront";
+import { useCustomerSession } from "@/lib/customer-auth";
 
 /**
  * /contact — working contact form with anti-spam protection.
@@ -12,12 +13,20 @@ import { submitContactMessage } from "@/lib/storefront";
  * language — green for success, red for errors — so the message type is
  * distinct at a glance. On success the form clears and the confirmation stays
  * visible. Anti-spam: honeypot field (invisible to humans) + rate limiting.
+ *
+ * When a customer is logged in, name/email are derived from the verified
+ * server-side session and the fields are shown read-only; guests fill them
+ * manually.
  */
 
 const inputClass =
   "mt-1.5 w-full rounded-lg border border-neutral-300 px-3 py-3 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none";
 
 export default function ContactView() {
+  const session = useCustomerSession();
+  const isAuthenticated = session !== null;
+  const user = session?.user ?? null;
+
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState("");
@@ -32,20 +41,36 @@ export default function ContactView() {
     setStatus("submitting");
     setError(null);
 
-    const trimmedName = name.trim();
-    const trimmedEmail = email.trim();
     const trimmedMessage = message.trim();
 
-    if (trimmedName === "" || trimmedEmail === "" || trimmedMessage === "") {
-      setStatus("error");
-      setError("Please fill in your name, email and message.");
-      return;
+    let payloadName: string;
+    let payloadEmail: string;
+
+    if (isAuthenticated && user) {
+      payloadName = user.name;
+      payloadEmail = user.email;
+      if (trimmedMessage === "") {
+        setStatus("error");
+        setError("Please enter your message.");
+        return;
+      }
+    } else {
+      const trimmedName = name.trim();
+      const trimmedEmail = email.trim();
+      if (trimmedName === "" || trimmedEmail === "" || trimmedMessage === "") {
+        setStatus("error");
+        setError("Please fill in your name, email and message.");
+        return;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+        setStatus("error");
+        setError("Please enter a valid email address.");
+        return;
+      }
+      payloadName = trimmedName;
+      payloadEmail = trimmedEmail;
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-      setStatus("error");
-      setError("Please enter a valid email address.");
-      return;
-    }
+
     if (trimmedMessage.length < 10) {
       setStatus("error");
       setError("Message must be at least 10 characters.");
@@ -53,12 +78,15 @@ export default function ContactView() {
     }
 
     try {
-      await submitContactMessage({
-        name: trimmedName,
-        email: trimmedEmail,
-        message: trimmedMessage,
-        website, // Honeypot — should always be empty for real users
-      });
+      await submitContactMessage(
+        {
+          name: payloadName,
+          email: payloadEmail,
+          message: trimmedMessage,
+          website, // Honeypot — should always be empty for real users
+        },
+        session?.token,
+      );
       setName("");
       setEmail("");
       setMessage("");
@@ -107,37 +135,47 @@ export default function ContactView() {
           />
         </div>
 
-        <label
-          htmlFor="contact-name"
-          className="block text-sm font-medium text-neutral-700"
-        >
-          Name
-        </label>
-        <input
-          id="contact-name"
-          type="text"
-          autoComplete="name"
-          required
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          className={inputClass}
-        />
+        {isAuthenticated && user ? (
+          <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm">
+            <p className="text-neutral-600">
+              Sending as <span className="font-medium text-neutral-900">{user.name}</span> ({user.email})
+            </p>
+          </div>
+        ) : (
+          <>
+            <label
+              htmlFor="contact-name"
+              className="block text-sm font-medium text-neutral-700"
+            >
+              Name
+            </label>
+            <input
+              id="contact-name"
+              type="text"
+              autoComplete="name"
+              required
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              className={inputClass}
+            />
 
-        <label
-          htmlFor="contact-email"
-          className="mt-5 block text-sm font-medium text-neutral-700"
-        >
-          Email
-        </label>
-        <input
-          id="contact-email"
-          type="email"
-          autoComplete="email"
-          required
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          className={inputClass}
-        />
+            <label
+              htmlFor="contact-email"
+              className="mt-5 block text-sm font-medium text-neutral-700"
+            >
+              Email
+            </label>
+            <input
+              id="contact-email"
+              type="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              className={inputClass}
+            />
+          </>
+        )}
 
         <label
           htmlFor="contact-message"
