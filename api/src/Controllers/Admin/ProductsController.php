@@ -391,6 +391,32 @@ final class ProductsController extends Controller
     }
 
     /**
+     * GET /api/admin/products/{id} — single product with variants and images
+     * (admin view, includes paused products).
+     */
+    public function show(Request $request, array $params): never
+    {
+        $id      = (int) ($params['id'] ?? 0);
+        $product = $this->products->findById($id);
+        if ($product === null) {
+            $this->error('Product not found.', 404);
+        }
+
+        $this->json([
+            'data' => array_merge(
+                $product->toArray(),
+                [
+                    'variants' => array_map(
+                        static fn (Variant $v): array => $v->toArray(),
+                        $this->variants->listByProduct($id)
+                    ),
+                    'images' => $this->images->listByProduct($id),
+                ]
+            ),
+        ]);
+    }
+
+    /**
      * DELETE /api/admin/products/{id} — hard-delete, blocked when ordered.
      *
      * The schema's order_items -> product_variants FK is ON DELETE RESTRICT:
@@ -411,6 +437,169 @@ final class ProductsController extends Controller
         }
 
         $this->products->delete($id);
+        $this->noContent();
+    }
+
+    /**
+     * POST /api/admin/products/{id}/variants — add a variant to a product.
+     */
+    public function storeVariant(Request $request, array $params): never
+    {
+        $productId = (int) ($params['id'] ?? 0);
+        $product   = $this->products->findById($productId);
+        if ($product === null) {
+            $this->error('Product not found.', 404);
+        }
+
+        $size  = trim((string) $request->input('size', ''));
+        $color = trim((string) $request->input('color', ''));
+        $sku   = trim((string) $request->input('sku', ''));
+        $price = $request->input('price');
+        $price = $price === null || $price === '' ? null : (string) $price;
+        $stock = $request->input('stock_quantity', 0);
+
+        $errors = [];
+        if ($size === '') {
+            $errors['size'] = 'Size is required.';
+        }
+        if ($color === '') {
+            $errors['color'] = 'Color is required.';
+        }
+        if ($sku === '') {
+            $errors['sku'] = 'SKU is required.';
+        }
+        if ($price !== null && !preg_match('/^\d{1,8}(\.\d{1,2})?$/', $price)) {
+            $errors['price'] = 'Price must be a valid amount (max 2 decimals).';
+        }
+        if (!ctype_digit((string) $stock)) {
+            $errors['stock_quantity'] = 'Stock quantity must be a non-negative integer.';
+        }
+        if ($errors !== []) {
+            $this->error('Validation failed.', 422, ['errors' => $errors]);
+        }
+
+        try {
+            $id = $this->variants->create(
+                $productId,
+                $size,
+                $color,
+                $sku,
+                $price,
+                (int) $stock
+            );
+        } catch (PDOException $e) {
+            if ((string) $e->getCode() === '23000') {
+                $this->error('A variant SKU or size/color combination already exists.', 409);
+            }
+            throw $e;
+        }
+
+        $variant = $this->variants->findById($id);
+        $this->json(['data' => $variant->toArray()], 201);
+    }
+
+    /**
+     * PUT /api/admin/variants/{id} — update a variant.
+     */
+    public function updateVariant(Request $request, array $params): never
+    {
+        $id      = (int) ($params['id'] ?? 0);
+        $variant = $this->variants->findById($id);
+        if ($variant === null) {
+            $this->error('Variant not found.', 404);
+        }
+
+        $body   = $request->all();
+        $fields = [];
+        $errors = [];
+
+        if (array_key_exists('size', $body)) {
+            $size = trim((string) $body['size']);
+            if ($size === '') {
+                $errors['size'] = 'Size is required.';
+            } else {
+                $fields['size'] = $size;
+            }
+        }
+        if (array_key_exists('color', $body)) {
+            $color = trim((string) $body['color']);
+            if ($color === '') {
+                $errors['color'] = 'Color is required.';
+            } else {
+                $fields['color'] = $color;
+            }
+        }
+        if (array_key_exists('sku', $body)) {
+            $sku = trim((string) $body['sku']);
+            if ($sku === '') {
+                $errors['sku'] = 'SKU is required.';
+            } else {
+                $fields['sku'] = $sku;
+            }
+        }
+        if (array_key_exists('price', $body)) {
+            $price = $body['price'];
+            if ($price === null || $price === '') {
+                $fields['price'] = null;
+            } elseif (!preg_match('/^\d{1,8}(\.\d{1,2})?$/', (string) $price)) {
+                $errors['price'] = 'Price must be a valid amount (max 2 decimals).';
+            } else {
+                $fields['price'] = (string) $price;
+            }
+        }
+        if (array_key_exists('stock_quantity', $body)) {
+            $stock = $body['stock_quantity'];
+            if ($stock === '' || $stock === null) {
+                $fields['stock_quantity'] = 0;
+            } elseif (!ctype_digit((string) $stock)) {
+                $errors['stock_quantity'] = 'Stock quantity must be a non-negative integer.';
+            } else {
+                $fields['stock_quantity'] = (int) $stock;
+            }
+        }
+
+        if ($errors !== []) {
+            $this->error('Validation failed.', 422, ['errors' => $errors]);
+        }
+        if ($fields === []) {
+            $this->error('Validation failed.', 422, ['errors' => ['_general' => 'No fields to update.']]);
+        }
+
+        try {
+            $this->variants->update($id, $fields);
+        } catch (PDOException $e) {
+            if ((string) $e->getCode() === '23000') {
+                $this->error('A variant SKU or size/color combination already exists.', 409);
+            }
+            throw $e;
+        }
+
+        $updated = $this->variants->findById($id);
+        $this->json(['data' => $updated->toArray()]);
+    }
+
+    /**
+     * DELETE /api/admin/variants/{id} — delete a variant.
+     */
+    public function destroyVariant(Request $request, array $params): never
+    {
+        $id      = (int) ($params['id'] ?? 0);
+        $variant = $this->variants->findById($id);
+        if ($variant === null) {
+            $this->error('Variant not found.', 404);
+        }
+
+        // Prevent deleting ordered variants (ON DELETE RESTRICT).
+        $stmt = Database::get()->prepare(
+            'SELECT 1 FROM order_items WHERE product_variant_id = :id LIMIT 1'
+        );
+        $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
+        $stmt->execute();
+        if ($stmt->fetchColumn() !== false) {
+            $this->error('Variant has been ordered and cannot be deleted.', 409);
+        }
+
+        $this->variants->delete($id);
         $this->noContent();
     }
 

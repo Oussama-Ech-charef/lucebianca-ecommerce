@@ -68,6 +68,64 @@ final class ProductVariantRepository extends Repository
     }
 
     /**
+     * Finds a variant by id.
+     */
+    public function findById(int $id): ?Variant
+    {
+        $stmt = $this->db->prepare('SELECT * FROM product_variants WHERE id = :id LIMIT 1');
+        $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        $row = $stmt->fetch();
+        return $row === false ? null : Variant::fromRow($row);
+    }
+
+    /**
+     * Updates a variant's whitelisted fields.
+     *
+     * @param array<string, mixed> $fields Subset of size, color, sku, price, stock_quantity
+     */
+    public function update(int $id, array $fields): void
+    {
+        $allowed = ['size', 'color', 'sku', 'price', 'stock_quantity'];
+        $sets = [];
+        foreach ($fields as $key => $value) {
+            if (!in_array($key, $allowed, true)) {
+                continue;
+            }
+            $sets[] = "{$key} = :{$key}";
+        }
+        if ($sets === []) {
+            return;
+        }
+        $stmt = $this->db->prepare('UPDATE product_variants SET ' . implode(', ', $sets) . ' WHERE id = :id');
+        $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
+        foreach ($fields as $key => $value) {
+            if (!in_array($key, $allowed, true)) {
+                continue;
+            }
+            if ($key === 'stock_quantity') {
+                $stmt->bindValue(":{$key}", (int) $value, \PDO::PARAM_INT);
+            } elseif ($key === 'price') {
+                $stmt->bindValue(":{$key}", $value === '' || $value === null ? null : (string) $value);
+            } else {
+                $stmt->bindValue(":{$key}", (string) $value);
+            }
+        }
+        $stmt->execute();
+    }
+
+    /**
+     * Deletes a variant.
+     */
+    public function delete(int $id): void
+    {
+        $stmt = $this->db->prepare('DELETE FROM product_variants WHERE id = :id');
+        $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
+        $stmt->execute();
+    }
+
+    /**
      * Whether any of a product's variants appear on an order line.
      *
      * Drives the hard-delete guard (destroy): if true, deleting the product

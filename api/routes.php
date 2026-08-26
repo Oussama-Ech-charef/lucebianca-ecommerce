@@ -117,10 +117,14 @@ $router->post('/api/admin/auth/login', [AdminAuthController::class, 'login']);
 $adminCsrf = array_merge($adminMiddleware, [$csrfProtection]);
 
 $router->get('/api/admin/products', [ProductsController::class, 'index'], $adminMiddleware);
+$router->get('/api/admin/products/{id}', [ProductsController::class, 'show'], $adminMiddleware);
 $router->post('/api/admin/products', [ProductsController::class, 'store'], $adminCsrf);
 $router->put('/api/admin/products/{id}', [ProductsController::class, 'update'], $adminCsrf);
 $router->delete('/api/admin/products/{id}', [ProductsController::class, 'destroy'], $adminCsrf);
 $router->post('/api/admin/products/{id}/images', [ProductsController::class, 'uploadImages'], $adminCsrf);
+$router->post('/api/admin/products/{id}/variants', [ProductsController::class, 'storeVariant'], $adminCsrf);
+$router->put('/api/admin/variants/{id}', [ProductsController::class, 'updateVariant'], $adminCsrf);
+$router->delete('/api/admin/variants/{id}', [ProductsController::class, 'destroyVariant'], $adminCsrf);
 $router->get('/api/admin/orders', [OrdersController::class, 'index'], $adminMiddleware);
 $router->put('/api/admin/orders/{id}', [OrdersController::class, 'update'], $adminCsrf);
 $router->get('/api/admin/dashboard-stats', [DashboardController::class, 'show'], $adminMiddleware);
