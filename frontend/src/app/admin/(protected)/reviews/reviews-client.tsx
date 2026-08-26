@@ -40,6 +40,7 @@ export default function ReviewsClient() {
   const [page, setPage] = useState(1);
   const [meta, setMeta] = useState<ReviewsResponse["meta"] | null>(null);
   const [filter, setFilter] = useState<"all" | "pending" | "approved">("pending");
+  const [viewReview, setViewReview] = useState<Review | null>(null);
 
   const sessionExpired = useCallback(() => {
     setError("Your session has expired. Please sign in again.");
@@ -49,6 +50,31 @@ export default function ReviewsClient() {
 
   // Bumped by mutation handlers to refetch with the same page/filter.
   const [reloadKey, setReloadKey] = useState(0);
+
+  const isViewOpen = viewReview !== null;
+  function openView(review: Review) {
+    setViewReview(review);
+  }
+  function closeView() {
+    setViewReview(null);
+  }
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && isViewOpen) closeView();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isViewOpen]);
+  useEffect(() => {
+    if (isViewOpen) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [isViewOpen]);
 
   // Data loads inline in the effect with state updates confined to promise
   // continuations (react-hooks/set-state-in-effect). A missing session here
@@ -280,7 +306,13 @@ export default function ReviewsClient() {
                   <p className="mb-3 text-sm text-neutral-700">{review.comment}</p>
                 )}
 
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    onClick={() => openView(review)}
+                    className="text-sm text-neutral-600 hover:underline"
+                  >
+                    View
+                  </button>
                   {review.is_approved === 0 && (
                     <button
                       onClick={() => approveReview(review.id)}
@@ -332,6 +364,68 @@ export default function ReviewsClient() {
             </div>
           )}
         </>
+      )}
+
+      {isViewOpen && viewReview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Close review details"
+            onClick={closeView}
+            className="absolute inset-0 bg-black/40"
+          />
+          <div className="relative max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="font-serif text-lg">{viewReview.product_name}</h2>
+                <p className="mt-1 text-sm text-neutral-500">
+                  Customer: {viewReview.user_name || "Guest"}
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Close"
+                onClick={closeView}
+                className="rounded-md p-1 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900"
+              >
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
+                  <path d="M6 6L18 18M18 6L6 18" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <dl className="mt-4 space-y-3 text-sm">
+              <div className="flex justify-between gap-4">
+                <dt className="text-neutral-500">Rating</dt>
+                <dd className="flex items-center gap-1">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <span key={i} className={i < viewReview.rating ? "text-amber-500" : "text-neutral-300"}>
+                      ★
+                    </span>
+                  ))}
+                  <span className="ml-1">{viewReview.rating}/5</span>
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-neutral-500">Status</dt>
+                <dd>
+                  <span className={`rounded px-2 py-1 text-xs font-medium ${viewReview.is_approved === 1 ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                    {viewReview.is_approved === 1 ? "Approved" : "Pending"}
+                  </span>
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-neutral-500">Date</dt>
+                <dd>{new Date(viewReview.created_at).toLocaleString()}</dd>
+              </div>
+            </dl>
+            {viewReview.comment && (
+              <div className="mt-4 rounded-lg border border-neutral-200 p-4">
+                <h3 className="text-xs font-medium uppercase tracking-wide text-neutral-500">Comment</h3>
+                <p className="mt-2 whitespace-pre-line text-sm text-neutral-700">{viewReview.comment}</p>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
