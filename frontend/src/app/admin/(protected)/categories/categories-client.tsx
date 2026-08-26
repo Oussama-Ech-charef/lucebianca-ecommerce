@@ -26,6 +26,8 @@ export default function CategoriesClient() {
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [viewCategory, setViewCategory] = useState<Category | null>(null);
+  const [viewProducts, setViewProducts] = useState<{ name: string; slug: string }[] | null>(null);
 
   // The admin JWT was rejected — end the session and return to login.
   function handleSessionExpired() {
@@ -33,6 +35,49 @@ export default function CategoriesClient() {
     clearAdminSession();
     router.replace("/admin/login");
   }
+
+  const isViewOpen = viewCategory !== null;
+
+  function openView(category: Category) {
+    setViewCategory(category);
+    setViewProducts(null);
+    // Load products for this category if API supports it
+    fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/products?category=${encodeURIComponent(category.slug)}&per_page=20`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && Array.isArray(data.data)) {
+          setViewProducts(
+            data.data.map((p: { name: string; slug: string }) => ({ name: p.name, slug: p.slug }))
+          );
+        }
+      })
+      .catch(() => {});
+  }
+
+  function closeView() {
+    setViewCategory(null);
+    setViewProducts(null);
+  }
+
+  // Escape + scroll lock for View modal
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && isViewOpen) closeView();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isViewOpen]);
+
+  useEffect(() => {
+    if (isViewOpen) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [isViewOpen]);
 
   useEffect(() => {
     fetchCategories();
@@ -242,40 +287,146 @@ export default function CategoriesClient() {
       {categories.length === 0 ? (
         <p className="text-sm text-neutral-500">No categories found.</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-neutral-200">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-neutral-200 bg-neutral-50">
-              <tr>
-                <th className="px-4 py-3 font-medium">Name</th>
-                <th className="px-4 py-3 font-medium">Slug</th>
-                <th className="px-4 py-3 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {categories.map((category) => (
-                <tr key={category.id} className="border-b border-neutral-100">
-                  <td className="px-4 py-3 font-medium">{category.name}</td>
-                  <td className="px-4 py-3 text-neutral-600">{category.slug}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => openEditForm(category)}
-                        className="text-blue-600 hover:underline"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => deleteCategory(category.id, category.name)}
-                        className="text-red-600 hover:underline"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </td>
+        <>
+          <div className="hidden overflow-x-auto rounded-lg border border-neutral-200 md:block">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-neutral-200 bg-neutral-50">
+                <tr>
+                  <th className="px-4 py-3 font-medium">Name</th>
+                  <th className="px-4 py-3 font-medium">Slug</th>
+                  <th className="px-4 py-3 font-medium">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {categories.map((category) => (
+                  <tr key={category.id} className="border-b border-neutral-100">
+                    <td className="px-4 py-3 font-medium">{category.name}</td>
+                    <td className="px-4 py-3 text-neutral-600">{category.slug}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <button
+                          onClick={() => openView(category)}
+                          className="whitespace-nowrap text-neutral-600 hover:underline"
+                        >
+                          View
+                        </button>
+                        <button
+                          onClick={() => openEditForm(category)}
+                          className="whitespace-nowrap text-blue-600 hover:underline"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => deleteCategory(category.id, category.name)}
+                          className="whitespace-nowrap text-red-600 hover:underline"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="grid gap-4 md:hidden">
+            {categories.map((category) => (
+              <div
+                key={category.id}
+                className="rounded-lg border border-neutral-200 bg-white p-4"
+              >
+                <p className="font-medium leading-tight">{category.name}</p>
+                <p className="mt-1 break-all text-sm text-neutral-500">/{category.slug}</p>
+                <p className="mt-2 text-xs text-neutral-500">
+                  Created {new Date(category.created_at).toLocaleDateString()}
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => openView(category)}
+                    className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                  >
+                    View
+                  </button>
+                  <button
+                    onClick={() => openEditForm(category)}
+                    className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => deleteCategory(category.id, category.name)}
+                    className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {isViewOpen && viewCategory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Close category details"
+            onClick={closeView}
+            className="absolute inset-0 bg-black/40"
+          />
+          <div className="relative max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="font-serif text-xl">{viewCategory.name}</h2>
+                <p className="mt-1 break-all text-sm text-neutral-500">/{viewCategory.slug}</p>
+              </div>
+              <button
+                type="button"
+                aria-label="Close"
+                onClick={closeView}
+                className="rounded-md p-1 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900"
+              >
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
+                  <path d="M6 6L18 18M18 6L6 18" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <dl className="mt-6 space-y-3 text-sm">
+              <div className="flex justify-between gap-4">
+                <dt className="text-neutral-500">Slug</dt>
+                <dd className="font-medium break-all">{viewCategory.slug}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-neutral-500">Created</dt>
+                <dd>{new Date(viewCategory.created_at).toLocaleString()}</dd>
+              </div>
+            </dl>
+            <div className="mt-6">
+              <h3 className="text-sm font-medium">Products in this category</h3>
+              {viewProducts === null ? (
+                <p className="mt-2 text-sm text-neutral-500">Loading…</p>
+              ) : viewProducts.length === 0 ? (
+                <p className="mt-2 text-sm text-neutral-500">No products in this category.</p>
+              ) : (
+                <ul className="mt-2 divide-y divide-neutral-100 rounded-lg border border-neutral-200">
+                  {viewProducts.map((p) => (
+                    <li key={p.slug} className="px-3 py-2 text-sm">
+                      <a
+                        href={`/product/${p.slug}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium text-neutral-900 hover:underline"
+                      >
+                        {p.name}
+                      </a>
+                      <span className="ml-2 text-xs text-neutral-500">/{p.slug}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
