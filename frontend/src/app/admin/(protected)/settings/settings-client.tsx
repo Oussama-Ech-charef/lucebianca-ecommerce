@@ -132,47 +132,49 @@ export default function SettingsClient() {
         </div>
       )}
 
-      <div className="mb-6 flex gap-2 border-b border-neutral-200">
-        <button
-          onClick={() => setActiveTab("store")}
-          className={`border-b-2 px-4 py-2 text-sm font-medium ${
-            activeTab === "store"
-              ? "border-neutral-900 text-neutral-900"
-              : "border-transparent text-neutral-600 hover:text-neutral-900"
-          }`}
-        >
-          Store Info
-        </button>
-        <button
-          onClick={() => setActiveTab("shipping")}
-          className={`border-b-2 px-4 py-2 text-sm font-medium ${
-            activeTab === "shipping"
-              ? "border-neutral-900 text-neutral-900"
-              : "border-transparent text-neutral-600 hover:text-neutral-900"
-          }`}
-        >
-          Shipping
-        </button>
-        <button
-          onClick={() => setActiveTab("payments")}
-          className={`border-b-2 px-4 py-2 text-sm font-medium ${
-            activeTab === "payments"
-              ? "border-neutral-900 text-neutral-900"
-              : "border-transparent text-neutral-600 hover:text-neutral-900"
-          }`}
-        >
-          Payments
-        </button>
-        <button
-          onClick={() => setActiveTab("notifications")}
-          className={`border-b-2 px-4 py-2 text-sm font-medium ${
-            activeTab === "notifications"
-              ? "border-neutral-900 text-neutral-900"
-              : "border-transparent text-neutral-600 hover:text-neutral-900"
-          }`}
-        >
-          Notifications
-        </button>
+      <div className="mb-6 -mx-6 overflow-x-auto px-6">
+        <div className="flex gap-2 border-b border-neutral-200">
+          <button
+            onClick={() => setActiveTab("store")}
+            className={`shrink-0 whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium ${
+              activeTab === "store"
+                ? "border-neutral-900 text-neutral-900"
+                : "border-transparent text-neutral-600 hover:text-neutral-900"
+            }`}
+          >
+            Store Info
+          </button>
+          <button
+            onClick={() => setActiveTab("shipping")}
+            className={`shrink-0 whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium ${
+              activeTab === "shipping"
+                ? "border-neutral-900 text-neutral-900"
+                : "border-transparent text-neutral-600 hover:text-neutral-900"
+            }`}
+          >
+            Shipping
+          </button>
+          <button
+            onClick={() => setActiveTab("payments")}
+            className={`shrink-0 whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium ${
+              activeTab === "payments"
+                ? "border-neutral-900 text-neutral-900"
+                : "border-transparent text-neutral-600 hover:text-neutral-900"
+            }`}
+          >
+            Payments
+          </button>
+          <button
+            onClick={() => setActiveTab("notifications")}
+            className={`shrink-0 whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium ${
+              activeTab === "notifications"
+                ? "border-neutral-900 text-neutral-900"
+                : "border-transparent text-neutral-600 hover:text-neutral-900"
+            }`}
+          >
+            Notifications
+          </button>
+        </div>
       </div>
 
       <div className="max-w-3xl space-y-6">
