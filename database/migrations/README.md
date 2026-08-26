@@ -40,3 +40,4 @@ mysql -u root -p < database/migrations/002_add_refresh_tokens_table.sql
 | `009_add_email_to_orders.sql` | orders.email (guest checkout confirmations) | applied |
 | `010_add_newsletter_status_columns.sql` | newsletter_subscribers.is_active/unsubscribed_at — aligns fresh installs with NewsletterRepository (first subscribe failed with "Unknown column 'is_active'"; caught by api/tests) | applied |
 | `011_add_sale_price_to_products.sql` | products.sale_price — optional discounted price column for "Special Offers" feature; positive and < base_price | applied |
+| `012_add_product_sizes_colors_tables.sql` | product_sizes / product_colors catalog tables with unique names and seed of distinct variant values | applied |

@@ -22,6 +22,7 @@ use App\Core\Router;
 use App\Controllers\AccountController;
 use App\Controllers\Admin\AuthController as AdminAuthController;
 use App\Controllers\Admin\CategoriesController;
+use App\Controllers\Admin\ColorsController as AdminColorsController;
 use App\Controllers\Admin\CustomersController;
 use App\Controllers\Admin\DashboardController;
 use App\Controllers\Admin\MessagesController;
@@ -29,9 +30,11 @@ use App\Controllers\Admin\OrdersController;
 use App\Controllers\Admin\ProductsController;
 use App\Controllers\Admin\ReviewsController;
 use App\Controllers\Admin\SettingsController;
+use App\Controllers\Admin\SizesController as AdminSizesController;
 use App\Controllers\AuthController;
 use App\Controllers\CartController;
 use App\Controllers\CategoryController;
+use App\Controllers\ColorController;
 use App\Controllers\ContactController;
 use App\Controllers\CsrfController;
 use App\Controllers\HealthController;
@@ -40,6 +43,7 @@ use App\Controllers\OrderController;
 use App\Controllers\PaymentController;
 use App\Controllers\ProductController;
 use App\Controllers\ReviewController;
+use App\Controllers\SizeController;
 use App\Controllers\WishlistController;
 
 $router = new Router();
@@ -65,6 +69,8 @@ $router->get('/api/products/new-arrivals', [ProductController::class, 'newArriva
 $router->get('/api/products/special-offers', [ProductController::class, 'specialOffers']);
 $router->get('/api/products/{slug}', [ProductController::class, 'show']);
 $router->get('/api/categories', [CategoryController::class, 'index']);
+$router->get('/api/sizes', [SizeController::class, 'index']);
+$router->get('/api/colors', [ColorController::class, 'index']);
 
 // --- Reviews (public submission requires auth) ---
 $router->post('/api/products/{slug}/reviews', [ReviewController::class, 'store'], [$csrfProtection]);
@@ -138,6 +144,16 @@ $router->get('/api/admin/categories', [CategoriesController::class, 'index'], $a
 $router->post('/api/admin/categories', [CategoriesController::class, 'store'], $adminCsrf);
 $router->put('/api/admin/categories/{id}', [CategoriesController::class, 'update'], $adminCsrf);
 $router->delete('/api/admin/categories/{id}', [CategoriesController::class, 'destroy'], $adminCsrf);
+
+// Catalog: Sizes
+$router->get('/api/admin/sizes', [AdminSizesController::class, 'index'], $adminMiddleware);
+$router->post('/api/admin/sizes', [AdminSizesController::class, 'store'], $adminCsrf);
+$router->delete('/api/admin/sizes/{id}', [AdminSizesController::class, 'destroy'], $adminCsrf);
+
+// Catalog: Colors
+$router->get('/api/admin/colors', [AdminColorsController::class, 'index'], $adminMiddleware);
+$router->post('/api/admin/colors', [AdminColorsController::class, 'store'], $adminCsrf);
+$router->delete('/api/admin/colors/{id}', [AdminColorsController::class, 'destroy'], $adminCsrf);
 
 // Reviews
 $router->get('/api/admin/reviews', [ReviewsController::class, 'index'], $adminMiddleware);
