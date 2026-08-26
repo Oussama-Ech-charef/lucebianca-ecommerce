@@ -7,6 +7,14 @@ import NewsletterForm from "@/components/newsletter-form";
 // info + legal pages); the storefront is deliberately limited to real routes.
 const SHOP_LINKS = [{ label: "Shop", href: "/shop" }];
 
+// Social media URLs — TODO: Replace placeholders with real Luce Bianca
+// business URLs before production (e.g., https://instagram.com/lucebianca.ma).
+const SOCIAL_LINKS = {
+  instagram: "#",
+  facebook: "#",
+  x: "#",
+};
+
 const INFO_LINKS = [
   { label: "About", href: "/about" },
   { label: "Contact", href: "/contact" },
@@ -16,6 +24,32 @@ const INFO_LINKS = [
   { label: "Terms", href: "/terms" },
   { label: "Privacy", href: "/privacy" },
 ];
+
+function InstagramIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
+      <rect x={3} y={3} width={18} height={18} rx={5} />
+      <circle cx={12} cy={12} r={4} />
+      <circle cx={17.5} cy={6.5} r={1} fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function FacebookIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M14 8h3V4h-3c-2.5 0-4 1.5-4 4v3H7v4h3v5h4v-5h3l1-4h-4V8c0-.5.5-1 1-1Z" />
+    </svg>
+  );
+}
+
+function XIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
+      <path d="M4 4L20 20M20 4L4 20" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 export default function Footer() {
   return (
@@ -85,7 +119,37 @@ export default function Footer() {
           </div>
         </div>
 
-        <p className="mt-10 border-t border-neutral-100 pt-6 text-center text-xs text-neutral-400">
+        <div className="mt-10 flex justify-center gap-3 border-t border-neutral-100 pt-6">
+          <a
+            href={SOCIAL_LINKS.instagram}
+            aria-label="Instagram"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-neutral-200 text-neutral-500 transition-colors hover:border-neutral-900 hover:text-neutral-900"
+          >
+            <InstagramIcon />
+          </a>
+          <a
+            href={SOCIAL_LINKS.facebook}
+            aria-label="Facebook"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-neutral-200 text-neutral-500 transition-colors hover:border-neutral-900 hover:text-neutral-900"
+          >
+            <FacebookIcon />
+          </a>
+          <a
+            href={SOCIAL_LINKS.x}
+            aria-label="X (formerly Twitter)"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-neutral-200 text-neutral-500 transition-colors hover:border-neutral-900 hover:text-neutral-900"
+          >
+            <XIcon />
+          </a>
+        </div>
+
+        <p className="mt-6 text-center text-xs text-neutral-400">
           © {new Date().getFullYear()} Luce Bianca. All rights reserved.
         </p>
       </div>

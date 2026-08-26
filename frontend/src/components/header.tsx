@@ -13,6 +13,8 @@ import { formatPrice } from "@/lib/storefront";
 // visitors get a sign-in prompt on that page rather than a hidden link.
 const NAV_LINKS = [
   { label: "Shop", href: "/shop" },
+  { label: "About", href: "/about" },
+  { label: "Contact", href: "/contact" },
   { label: "Wishlist", href: "/wishlist" },
 ];
 
