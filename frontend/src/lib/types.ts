@@ -214,6 +214,7 @@ export type OrderDetail = {
   shipping_address: string;
   customer_name: string;
   phone: string;
+  email: string | null;
   payment_method: string;
   payment_status: PaymentStatus;
   created_at: string;
