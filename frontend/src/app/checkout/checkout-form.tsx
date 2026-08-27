@@ -6,9 +6,10 @@ import { useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
 import { useCart } from "@/lib/cart-context";
-import { getCustomerSession } from "@/lib/customer-auth";
+import { fetchCustomerAccount, getCustomerSession } from "@/lib/customer-auth";
 import { formatPrice, placeOrder, validateCart } from "@/lib/storefront";
 import type { OrderDetail } from "@/lib/types";
+import type { CustomerUser } from "@/lib/types";
 import { buildWhatsAppLink } from "@/lib/whatsapp";
 
 type PaymentMethod = "cod" | "whatsapp";
@@ -55,12 +56,39 @@ export default function CheckoutForm() {
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
+  const [city, setCity] = useState("");
+  const [postalCode, setPostalCode] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cod");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [serverError, setServerError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [customer, setCustomer] = useState<CustomerUser | null>(null);
+  const [loadingCustomer, setLoadingCustomer] = useState(true);
 
   const redirectingRef = useRef(false);
+
+  // Load customer data if logged in
+  useEffect(() => {
+    const session = getCustomerSession();
+    if (session) {
+      fetchCustomerAccount(session.token)
+        .then((response) => {
+          setCustomer(response.data);
+          setName(response.data.name ?? "");
+          setEmail(response.data.email ?? "");
+          setPhone(response.data.phone ?? "");
+        })
+        .catch(() => {
+          // Ignore errors, just leave customer as null
+        })
+        .finally(() => {
+          setLoadingCustomer(false);
+        });
+    } else {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setLoadingCustomer(false);
+    }
+  }, []);
 
   // Empty-cart guard: if nothing is in the cart, go back.
   useEffect(() => {
@@ -122,23 +150,31 @@ export default function CheckoutForm() {
     };
   }, [items]);
 
+  const isLoggedIn = customer !== null;
+
   function validate(): boolean {
-    const next: Record<string, string> = {};
-    if (name.trim().length < 2) {
-      next.name = "Please enter your full name.";
-    }
-    if (!/^[0-9+()\-\s]{8,20}$/.test(phone.trim())) {
-      next.phone = "Please enter a valid phone number.";
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      next.email = "Please enter a valid email address.";
-    }
-    if (address.trim().length < 5) {
-      next.address = "Please enter your shipping address.";
-    }
-    setErrors(next);
-    return Object.keys(next).length === 0;
+  const next: Record<string, string> = {};
+  if (!isLoggedIn && name.trim().length < 2) {
+    next.name = "Please enter your full name.";
   }
+  if (!/^[0-9+()\-\s]{8,20}$/.test(phone.trim())) {
+    next.phone = "Please enter a valid phone number.";
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    next.email = "Please enter a valid email address.";
+  }
+  if (address.trim().length < 5) {
+    next.address = "Please enter your shipping address.";
+  }
+  if (!city.trim()) {
+    next.city = "Please enter your city.";
+  }
+  if (!postalCode.trim()) {
+    next.postalCode = "Please enter your postal code.";
+  }
+  setErrors(next);
+  return Object.keys(next).length === 0;
+}
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -180,12 +216,15 @@ export default function CheckoutForm() {
 
     setSubmitting(true);
     try {
-      const response = await placeOrder(
+    const shippingAddress = [address.trim(), city.trim(), postalCode.trim()]
+      .filter(Boolean)
+      .join(", ");
+    const response = await placeOrder(
         {
           customer_name: name.trim(),
           phone: phone.trim(),
           email: email.trim(),
-          shipping_address: address.trim(),
+          shipping_address: shippingAddress,
           payment_method: paymentMethod,
           items: items.map((item) => ({
             variant_id: item.variant_id,
@@ -221,82 +260,123 @@ export default function CheckoutForm() {
 
       <div className="mt-8 grid grid-cols-1 items-start gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
         <form onSubmit={handleSubmit} noValidate className="space-y-8">
-          <section>
-            <h2 className="font-serif text-lg">Contact & delivery</h2>
-            <div className="mt-4 space-y-4">
+          {customer && (
+            <div className="mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+              <p className="font-medium text-green-700">Using your saved information</p>
+              <p className="mt-1 text-xs text-neutral-600">
+                You can edit any field before placing your order.
+              </p>
+            </div>
+          )}
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="checkout-name" className="text-sm text-neutral-700">
+                Full name
+              </label>
+              <input
+                id="checkout-name"
+                type="text"
+                autoComplete="name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="e.g. Yasmine Alaoui"
+                className={errors.name ? errorClass : inputClass}
+              />
+              {errors.name && (
+                <p className="mt-1 text-xs text-red-700">{errors.name}</p>
+              )}
+            </div>
+            <div>
+              <label htmlFor="checkout-phone" className="text-sm text-neutral-700">
+                Phone
+              </label>
+              <input
+                id="checkout-phone"
+                type="tel"
+                autoComplete="tel"
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                placeholder="e.g. 06 12 34 56 78"
+                className={errors.phone ? errorClass : inputClass}
+              />
+              {errors.phone && (
+                <p className="mt-1 text-xs text-red-700">{errors.phone}</p>
+              )}
+            </div>
+            <div>
+              <label htmlFor="checkout-email" className="text-sm text-neutral-700">
+                Email
+              </label>
+              <input
+                id="checkout-email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="e.g. yasmine@example.com"
+                className={errors.email ? errorClass : inputClass}
+              />
+              {errors.email ? (
+                <p className="mt-1 text-xs text-red-700">{errors.email}</p>
+              ) : null}
+            </div>
+            <div>
+              <label
+                htmlFor="checkout-address"
+                className="text-sm text-neutral-700"
+              >
+                Shipping address
+              </label>
+              <textarea
+                id="checkout-address"
+                autoComplete="street-address"
+                value={address}
+                onChange={(event) => setAddress(event.target.value)}
+                placeholder="Street, number, city…"
+                rows={3}
+                className={errors.address ? errorClass : inputClass}
+              />
+              {errors.address && (
+                <p className="mt-1 text-xs text-red-700">{errors.address}</p>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <label htmlFor="checkout-name" className="text-sm text-neutral-700">
-                  Full name
+                <label htmlFor="checkout-city" className="text-sm text-neutral-700">
+                  City
                 </label>
                 <input
-                  id="checkout-name"
+                  id="checkout-city"
                   type="text"
-                  autoComplete="name"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="e.g. Yasmine Alaoui"
-                  className={errors.name ? errorClass : inputClass}
+                  autoComplete="address-level2"
+                  value={city}
+                  onChange={(event) => setCity(event.target.value)}
+                  placeholder="e.g. Casablanca"
+                  className={errors.city ? errorClass : inputClass}
                 />
-                {errors.name ? (
-                  <p className="mt-1 text-xs text-red-700">{errors.name}</p>
-                ) : null}
+                {errors.city && (
+                  <p className="mt-1 text-xs text-red-700">{errors.city}</p>
+                )}
               </div>
               <div>
-                <label htmlFor="checkout-phone" className="text-sm text-neutral-700">
-                  Phone
+                <label htmlFor="checkout-postal" className="text-sm text-neutral-700">
+                  Postal code
                 </label>
                 <input
-                  id="checkout-phone"
-                  type="tel"
-                  autoComplete="tel"
-                  value={phone}
-                  onChange={(event) => setPhone(event.target.value)}
-                  placeholder="e.g. 06 12 34 56 78"
-                  className={errors.phone ? errorClass : inputClass}
+                  id="checkout-postal"
+                  type="text"
+                  autoComplete="postal-code"
+                  value={postalCode}
+                  onChange={(event) => setPostalCode(event.target.value)}
+                  placeholder="e.g. 20000"
+                  className={errors.postalCode ? errorClass : inputClass}
                 />
-                {errors.phone ? (
-                  <p className="mt-1 text-xs text-red-700">{errors.phone}</p>
-                ) : null}
-              </div>
-              <div>
-                <label htmlFor="checkout-email" className="text-sm text-neutral-700">
-                  Email
-                </label>
-                <input
-                  id="checkout-email"
-                  type="email"
-                  autoComplete="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  placeholder="e.g. yasmine@example.com"
-                  className={errors.email ? errorClass : inputClass}
-                />
-                {errors.email ? (
-                  <p className="mt-1 text-xs text-red-700">{errors.email}</p>
-                ) : null}
-              </div>
-              <div>
-                <label
-                  htmlFor="checkout-address"
-                  className="text-sm text-neutral-700"
-                >
-                  Shipping address
-                </label>
-                <textarea
-                  id="checkout-address"
-                  autoComplete="street-address"
-                  value={address}
-                  onChange={(event) => setAddress(event.target.value)}
-                  placeholder="Street, number, city…"
-                  rows={3}
-                  className={errors.address ? errorClass : inputClass}
-                />
-                {errors.address ? (
-                  <p className="mt-1 text-xs text-red-700">{errors.address}</p>
-                ) : null}
+                {errors.postalCode && (
+                  <p className="mt-1 text-xs text-red-700">{errors.postalCode}</p>
+                )}
               </div>
             </div>
-          </section>
+          </div>
 
           <section>
             <h2 className="font-serif text-lg">Payment method</h2>
@@ -391,14 +471,16 @@ export default function CheckoutForm() {
 
           <button
             type="submit"
-            disabled={submitting}
+            disabled={submitting || loadingCustomer}
             className="w-full rounded-lg bg-neutral-900 px-6 py-4 text-sm font-medium text-white transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-300"
           >
-            {submitting
-              ? "Placing order…"
-              : paymentMethod === "whatsapp"
-                ? "Send order via WhatsApp"
-                : "Place order — pay on delivery"}
+            {loadingCustomer
+              ? "Loading your details…"
+              : submitting
+                ? "Placing order…"
+                : paymentMethod === "whatsapp"
+                  ? "Send order via WhatsApp"
+                  : "Place order — pay on delivery"}
           </button>
           <p className="text-center text-xs text-neutral-400">
             By placing this order you agree to be contacted by the store to
