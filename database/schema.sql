@@ -116,8 +116,11 @@ CREATE TABLE orders (
                      NOT NULL DEFAULT 'pending',
   total_amount     DECIMAL(10,2) NOT NULL,
   shipping_address VARCHAR(255)  NOT NULL,
+  city             VARCHAR(100)  NOT NULL,
+  postal_code      VARCHAR(20)   NOT NULL,
   customer_name    VARCHAR(100)  NOT NULL,
   phone            VARCHAR(20)   NOT NULL,
+  email            VARCHAR(150)  NOT NULL,
   payment_method   ENUM('card','cod','whatsapp') NOT NULL,  -- the agreed-on options
   payment_status   ENUM('pending','paid','failed') NOT NULL DEFAULT 'pending',
   created_at       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -453,7 +453,9 @@ $orderPayload = [
     'customer_name' => 'Yasmine Alaoui',
     'phone' => '0612345678',
     'email' => 'yasmine@example.com',
-    'shipping_address' => '12 Rue des Fleurs, Casablanca',
+    'shipping_address' => '12 Rue des Fleurs',
+    'city' => 'Casablanca',
+    'postal_code' => '20000',
     'payment_method' => 'cod',
     'items' => [['variant_id' => 1, 'quantity' => 2]],
 ];
@@ -627,7 +629,9 @@ check(($cartSale['data']['lines'][0]['unit_price'] ?? '') === '80.00', 'cart val
     'customer_name' => 'Sale Buyer',
     'phone' => '0612345678',
     'email' => 'salebuyer@example.com',
-    'shipping_address' => '123 Sale St, Casa',
+    'shipping_address' => '123 Sale St',
+    'city' => 'Casa',
+    'postal_code' => '20000',
     'payment_method' => 'cod',
     'items' => [['variant_id' => $saleVariantId, 'quantity' => 2]],
 ], $csrfAdm);

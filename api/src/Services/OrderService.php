@@ -119,18 +119,20 @@ final class OrderService
      *    server-computed price, and decrement each variant's stock via a
      *    guarded UPDATE (never below zero; affected-rows checked).
      *
-     * @param string          $customerName    Customer name.
+* @param string          $customerName    Customer name.
      * @param string          $phone           Customer phone.
      * @param string          $email           Customer email (for order confirmation).
      * @param string          $shippingAddress Shipping address.
+     * @param string          $city            City.
+     * @param string          $postalCode      Postal code.
      * @param string          $paymentMethod   'cod' | 'whatsapp' | 'card'.
-     * @param array<int, mixed> $lines         {variant_id, quantity} lines.
+     * @param array           $lines           Cart lines.
      * @param int|null        $userId          Optional authenticated customer id
      *                                         (null = guest checkout) so a
      *                                         logged-in order shows up on the
      *                                         customer's /account page.
      *
-     * @return Order The created order with its line items populated.
+     * @return Order The created order with its line items.
      *
      * @throws ValidationException On invalid fields or payment method.
      * @throws ConflictException   When any line's stock is insufficient.
@@ -140,6 +142,8 @@ final class OrderService
         string $phone,
         string $email,
         string $shippingAddress,
+        string $city,
+        string $postalCode,
         string $paymentMethod,
         array $lines,
         ?int $userId = null
@@ -151,12 +155,16 @@ final class OrderService
                 'phone'            => $phone,
                 'email'            => $email,
                 'shipping_address' => $shippingAddress,
+                'city'             => $city,
+                'postal_code'      => $postalCode,
             ],
             [
                 'customer_name'    => ['required', ['min', 2]],
                 'phone'            => ['required'],
                 'email'            => ['required', 'email'],
                 'shipping_address' => ['required'],
+                'city'             => ['required'],
+                'postal_code'      => ['required'],
             ]
         );
 
@@ -221,6 +229,8 @@ final class OrderService
             $orderId = $this->orders->insertOrder([
                 'total_amount'     => $totalAmount,
                 'shipping_address' => $shippingAddress,
+                'city'             => $city,
+                'postal_code'      => $postalCode,
                 'customer_name'    => $customerName,
                 'phone'            => $phone,
                 'email'            => $email,

@@ -36,6 +36,7 @@ final class OrderController extends Controller
      * POST /api/orders — place an order (COD / WhatsApp / Card).
      *
      * Body: {"customer_name": "...", "phone": "...", "email": "...", "shipping_address": "...",
+     *        "city": "...", "postal_code": "...",
      *        "payment_method": "cod"|"whatsapp"|"card",
      *        "items": [{"variant_id": 6, "quantity": 2}]}
      *
@@ -53,6 +54,8 @@ final class OrderController extends Controller
                 trim((string) $request->input('phone', '')),
                 trim((string) $request->input('email', '')),
                 trim((string) $request->input('shipping_address', '')),
+                trim((string) $request->input('city', '')),
+                trim((string) $request->input('postal_code', '')),
                 (string) $request->input('payment_method', ''),
                 is_array($request->input('items')) ? $request->input('items') : [],
                 $this->authenticatedCustomerId($request)

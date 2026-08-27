@@ -19,7 +19,7 @@ final class OrderRepository extends Repository
      * payment_status 'pending').
      *
      * @param array{
-     *   total_amount: string, shipping_address: string,
+     *   total_amount: string, shipping_address: string, city: string, postal_code: string,
      *   customer_name: string, phone: string, email: string, payment_method: string
      * } $data Order columns.
      * @param int|null $userId Optional authenticated customer id — NULL for
@@ -31,13 +31,15 @@ final class OrderRepository extends Repository
     {
         $stmt = $this->db->prepare(
             'INSERT INTO orders
-               (user_id, status, total_amount, shipping_address, customer_name, phone, email, payment_method, payment_status)
+               (user_id, status, total_amount, shipping_address, city, postal_code, customer_name, phone, email, payment_method, payment_status)
              VALUES
-               (:user_id, \'pending\', :total_amount, :shipping_address, :customer_name, :phone, :email, :payment_method, :payment_status)'
+               (:user_id, \'pending\', :total_amount, :shipping_address, :city, :postal_code, :customer_name, :phone, :email, :payment_method, :payment_status)'
         );
         $stmt->bindValue(':user_id', $userId, \PDO::PARAM_INT);
         $stmt->bindValue(':total_amount', $data['total_amount']);
         $stmt->bindValue(':shipping_address', $data['shipping_address']);
+        $stmt->bindValue(':city', $data['city'] ?? '');
+        $stmt->bindValue(':postal_code', $data['postal_code'] ?? '');
         $stmt->bindValue(':customer_name', $data['customer_name']);
         $stmt->bindValue(':phone', $data['phone']);
         $stmt->bindValue(':email', $data['email']);
