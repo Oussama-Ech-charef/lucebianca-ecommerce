@@ -44,6 +44,8 @@ export default function ProductForm({ productId }: ProductFormProps) {
   const [salePrice, setSalePrice] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [categories, setCategories] = useState<Category[]>([]);
+  const [availableSizes, setAvailableSizes] = useState<string[]>([]);
+  const [availableColors, setAvailableColors] = useState<string[]>([]);
   const [isActive, setIsActive] = useState(true);
   const [metaTitle, setMetaTitle] = useState("");
   const [metaDescription, setMetaDescription] = useState("");
@@ -56,6 +58,7 @@ export default function ProductForm({ productId }: ProductFormProps) {
     price: "",
     stock_quantity: 0,
   });
+  const [showNewVariantForm, setShowNewVariantForm] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,7 +79,31 @@ export default function ProductForm({ productId }: ProductFormProps) {
         console.error("Failed to fetch categories", err);
       }
     }
+    async function fetchSizes() {
+      try {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/sizes`);
+        if (res.ok) {
+          const data = await res.json();
+          setAvailableSizes((data.data || []).map((s: { name: string }) => s.name));
+        }
+      } catch (err) {
+        console.error("Failed to fetch sizes", err);
+      }
+    }
+    async function fetchColors() {
+      try {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/colors`);
+        if (res.ok) {
+          const data = await res.json();
+          setAvailableColors((data.data || []).map((c: { name: string }) => c.name));
+        }
+      } catch (err) {
+        console.error("Failed to fetch colors", err);
+      }
+    }
     fetchCategories();
+    fetchSizes();
+    fetchColors();
   }, []);
 
   useEffect(() => {
@@ -158,6 +185,10 @@ export default function ProductForm({ productId }: ProductFormProps) {
         { size: "", color: "", sku: "", price: "", stock_quantity: 0 },
       ]);
     } else {
+      if (!showNewVariantForm) {
+        setShowNewVariantForm(true);
+        return;
+      }
       // For edit mode, validate new variant before sending
       const newErrors: Record<string, string> = {};
       if (!newVariant.size.trim()) newErrors.size = "Size is required.";
@@ -183,6 +214,12 @@ export default function ProductForm({ productId }: ProductFormProps) {
       setVariantErrors({});
       handleCreateVariant();
     }
+  }
+
+  function cancelNewVariantForm() {
+    setShowNewVariantForm(false);
+    setNewVariant({ size: "", color: "", sku: "", price: "", stock_quantity: 0 });
+    setVariantErrors({});
   }
 
   async function handleCreateVariant() {
@@ -218,6 +255,8 @@ export default function ProductForm({ productId }: ProductFormProps) {
         const result = await response.json();
         setExistingVariants([...existingVariants, result.data]);
         setNewVariant({ size: "", color: "", sku: "", price: "", stock_quantity: 0 });
+        setShowNewVariantForm(false);
+        setVariantErrors({});
       } else if (response.status === 422) {
         const result = await response.json();
         setVariantErrors(result.errors || {});
@@ -629,38 +668,48 @@ export default function ProductForm({ productId }: ProductFormProps) {
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
-                    <input
-                      type="text"
-                      placeholder="Size (e.g., M)"
-                      value={variant.size}
+                    <select
+                      value={variant.size ?? ""}
                       onChange={(e) => updateExistingVariant(index, "size", e.target.value)}
                       className={inputClass}
-                    />
-                    <input
-                      type="text"
-                      placeholder="Color"
-                      value={variant.color}
+                    >
+                      <option value="">Select size</option>
+                      {[...new Set([...availableSizes, variant.size].filter(Boolean) as string[])].map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={variant.color ?? ""}
                       onChange={(e) => updateExistingVariant(index, "color", e.target.value)}
                       className={inputClass}
-                    />
+                    >
+                      <option value="">Select color</option>
+                      {[...new Set([...availableColors, variant.color].filter(Boolean) as string[])].map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
                     <input
                       type="text"
                       placeholder="SKU"
-                      value={variant.sku}
+                      value={variant.sku ?? ""}
                       onChange={(e) => updateExistingVariant(index, "sku", e.target.value)}
                       className={inputClass}
                     />
                     <input
                       type="text"
                       placeholder="Price (optional)"
-                      value={variant.price}
+                      value={variant.price ?? ""}
                       onChange={(e) => updateExistingVariant(index, "price", e.target.value)}
                       className={inputClass}
                     />
                     <input
                       type="number"
                       placeholder="Stock"
-                      value={variant.stock_quantity}
+                      value={variant.stock_quantity ?? 0}
                       onChange={(e) =>
                         updateExistingVariant(index, "stock_quantity", parseInt(e.target.value, 10) || 0)
                       }
@@ -683,58 +732,92 @@ export default function ProductForm({ productId }: ProductFormProps) {
                   )}
                 </div>
               ))}
-              {/* New variant inline form for edit mode */}
-              <div className="rounded-lg border border-dashed border-neutral-300 p-4">
-                <p className="mb-2 text-sm font-medium">Add new variant</p>
-                <div className="grid grid-cols-2 gap-3">
-                  <input
-                    type="text"
-                    placeholder="Size (e.g., M)"
-                    value={newVariant.size}
-                    onChange={(e) => setNewVariant({ ...newVariant, size: e.target.value })}
-                    className={inputClass}
-                  />
-                  <input
-                    type="text"
-                    placeholder="Color"
-                    value={newVariant.color}
-                    onChange={(e) => setNewVariant({ ...newVariant, color: e.target.value })}
-                    className={inputClass}
-                  />
-                  <input
-                    type="text"
-                    placeholder="SKU"
-                    value={newVariant.sku}
-                    onChange={(e) => setNewVariant({ ...newVariant, sku: e.target.value })}
-                    className={inputClass}
-                  />
-                  <input
-                    type="text"
-                    placeholder="Price (optional)"
-                    value={newVariant.price}
-                    onChange={(e) => setNewVariant({ ...newVariant, price: e.target.value })}
-                    className={inputClass}
-                  />
-                  <input
-                    type="number"
-                    placeholder="Stock"
-                    value={newVariant.stock_quantity}
-                    onChange={(e) =>
-                      setNewVariant({ ...newVariant, stock_quantity: parseInt(e.target.value, 10) || 0 })
-                    }
-                    className={inputClass}
-                  />
+              {/* New variant inline form for edit mode - hidden by default */}
+              {showNewVariantForm && (
+                <div className="rounded-lg border border-dashed border-neutral-300 p-4">
+                  <p className="mb-2 text-sm font-medium">Add new variant</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <select
+                      value={newVariant.size ?? ""}
+                      onChange={(e) => setNewVariant({ ...newVariant, size: e.target.value })}
+                      className={inputClass}
+                    >
+                      <option value="">Select size</option>
+                      {availableSizes.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                      {newVariant.size && !availableSizes.includes(newVariant.size) && (
+                        <option value={newVariant.size}>{newVariant.size}</option>
+                      )}
+                    </select>
+                    <select
+                      value={newVariant.color ?? ""}
+                      onChange={(e) => setNewVariant({ ...newVariant, color: e.target.value })}
+                      className={inputClass}
+                    >
+                      <option value="">Select color</option>
+                      {availableColors.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                      {newVariant.color && !availableColors.includes(newVariant.color) && (
+                        <option value={newVariant.color}>{newVariant.color}</option>
+                      )}
+                    </select>
+                    <input
+                      type="text"
+                      placeholder="SKU"
+                      value={newVariant.sku ?? ""}
+                      onChange={(e) => setNewVariant({ ...newVariant, sku: e.target.value })}
+                      className={inputClass}
+                    />
+                    <input
+                      type="text"
+                      placeholder="Price (optional)"
+                      value={newVariant.price ?? ""}
+                      onChange={(e) => setNewVariant({ ...newVariant, price: e.target.value })}
+                      className={inputClass}
+                    />
+                    <input
+                      type="number"
+                      placeholder="Stock"
+                      value={newVariant.stock_quantity ?? 0}
+                      onChange={(e) =>
+                        setNewVariant({ ...newVariant, stock_quantity: parseInt(e.target.value, 10) || 0 })
+                      }
+                      className={inputClass}
+                    />
+                  </div>
+                  {variantErrors.size && (
+                    <p className="mt-1 text-xs text-red-600">{variantErrors.size}</p>
+                  )}
+                  {variantErrors.sku && (
+                    <p className="mt-1 text-xs text-red-600">{variantErrors.sku}</p>
+                  )}
+                  {variantErrors.color && (
+                    <p className="mt-1 text-xs text-red-600">{variantErrors.color}</p>
+                  )}
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={addVariant}
+                      className="rounded bg-neutral-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-neutral-700"
+                    >
+                      Add
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelNewVariantForm}
+                      className="rounded border border-neutral-300 px-4 py-1.5 text-sm font-medium hover:bg-neutral-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
-                {variantErrors.size && (
-                  <p className="mt-1 text-xs text-red-600">{variantErrors.size}</p>
-                )}
-                {variantErrors.sku && (
-                  <p className="mt-1 text-xs text-red-600">{variantErrors.sku}</p>
-                )}
-                {variantErrors.color && (
-                  <p className="mt-1 text-xs text-red-600">{variantErrors.color}</p>
-                )}
-              </div>
+              )}
             </>
           ) : (
             <>
@@ -755,38 +838,48 @@ export default function ProductForm({ productId }: ProductFormProps) {
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
-                    <input
-                      type="text"
-                      placeholder="Size (e.g., M)"
-                      value={variant.size}
+                    <select
+                      value={variant.size ?? ""}
                       onChange={(e) => updateVariant(index, "size", e.target.value)}
                       className={inputClass}
-                    />
-                    <input
-                      type="text"
-                      placeholder="Color"
-                      value={variant.color}
+                    >
+                      <option value="">Select size</option>
+                      {[...new Set([...availableSizes, variant.size].filter(Boolean) as string[])].map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={variant.color ?? ""}
                       onChange={(e) => updateVariant(index, "color", e.target.value)}
                       className={inputClass}
-                    />
+                    >
+                      <option value="">Select color</option>
+                      {[...new Set([...availableColors, variant.color].filter(Boolean) as string[])].map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
                     <input
                       type="text"
                       placeholder="SKU"
-                      value={variant.sku}
+                      value={variant.sku ?? ""}
                       onChange={(e) => updateVariant(index, "sku", e.target.value)}
                       className={inputClass}
                     />
                     <input
                       type="text"
                       placeholder="Price (optional)"
-                      value={variant.price}
+                      value={variant.price ?? ""}
                       onChange={(e) => updateVariant(index, "price", e.target.value)}
                       className={inputClass}
                     />
                     <input
                       type="number"
                       placeholder="Stock"
-                      value={variant.stock_quantity}
+                      value={variant.stock_quantity ?? 0}
                       onChange={(e) =>
                         updateVariant(index, "stock_quantity", parseInt(e.target.value, 10) || 0)
                       }
