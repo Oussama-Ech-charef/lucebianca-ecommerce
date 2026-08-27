@@ -212,6 +212,8 @@ export type OrderDetail = {
   status: OrderStatus;
   total_amount: string;
   shipping_address: string;
+  city: string;
+  postal_code: string;
   customer_name: string;
   phone: string;
   email: string | null;

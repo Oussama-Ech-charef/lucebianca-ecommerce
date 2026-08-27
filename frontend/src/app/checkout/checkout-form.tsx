@@ -32,6 +32,7 @@ function buildWhatsAppMessage(order: OrderDetail): string {
         `- ${item.product_name} (${item.size}, ${item.color}) × ${item.quantity} — ${formatPrice(Number(item.price_at_purchase) * item.quantity)}`,
     )
     .join("\n");
+  const addressParts = [order.shipping_address, order.city, order.postal_code].filter(Boolean).join(", ");
   return [
     `Hello Luce Bianca! I'd like to confirm my order.`,
     ``,
@@ -42,7 +43,7 @@ function buildWhatsAppMessage(order: OrderDetail): string {
     ``,
     `Name: ${order.customer_name}`,
     `Phone: ${order.phone}`,
-    `Address: ${order.shipping_address}`,
+    `Address: ${addressParts}`,
     ``,
     `Payment: ${paymentLabel(order.payment_method)}`,
   ].join("\n");
@@ -153,28 +154,28 @@ export default function CheckoutForm() {
   const isLoggedIn = customer !== null;
 
   function validate(): boolean {
-  const next: Record<string, string> = {};
-  if (!isLoggedIn && name.trim().length < 2) {
-    next.name = "Please enter your full name.";
+    const next: Record<string, string> = {};
+    if (!isLoggedIn && name.trim().length < 2) {
+      next.name = "Please enter your full name.";
+    }
+    if (!/^[0-9+()\-\s]{8,20}$/.test(phone.trim())) {
+      next.phone = "Please enter a valid phone number.";
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      next.email = "Please enter a valid email address.";
+    }
+    if (address.trim().length < 5) {
+      next.address = "Please enter your shipping address.";
+    }
+    if (!city.trim()) {
+      next.city = "Please enter your city.";
+    }
+    if (!postalCode.trim()) {
+      next.postalCode = "Please enter your postal code.";
+    }
+    setErrors(next);
+    return Object.keys(next).length === 0;
   }
-  if (!/^[0-9+()\-\s]{8,20}$/.test(phone.trim())) {
-    next.phone = "Please enter a valid phone number.";
-  }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-    next.email = "Please enter a valid email address.";
-  }
-  if (address.trim().length < 5) {
-    next.address = "Please enter your shipping address.";
-  }
-  if (!city.trim()) {
-    next.city = "Please enter your city.";
-  }
-  if (!postalCode.trim()) {
-    next.postalCode = "Please enter your postal code.";
-  }
-  setErrors(next);
-  return Object.keys(next).length === 0;
-}
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -216,15 +217,14 @@ export default function CheckoutForm() {
 
     setSubmitting(true);
     try {
-    const shippingAddress = [address.trim(), city.trim(), postalCode.trim()]
-      .filter(Boolean)
-      .join(", ");
-    const response = await placeOrder(
+      const response = await placeOrder(
         {
           customer_name: name.trim(),
           phone: phone.trim(),
           email: email.trim(),
-          shipping_address: shippingAddress,
+          shipping_address: address.trim(),
+          city: city.trim(),
+          postal_code: postalCode.trim(),
           payment_method: paymentMethod,
           items: items.map((item) => ({
             variant_id: item.variant_id,

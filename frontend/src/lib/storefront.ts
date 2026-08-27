@@ -129,6 +129,8 @@ export function placeOrder(
     phone: string;
     email: string;
     shipping_address: string;
+    city: string;
+    postal_code: string;
     payment_method: "cod" | "whatsapp";
     items: { variant_id: number; quantity: number }[];
   },
