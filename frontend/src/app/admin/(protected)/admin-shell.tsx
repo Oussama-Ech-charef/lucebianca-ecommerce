@@ -22,6 +22,7 @@ import { clearAdminSession, getAdminSession } from "@/lib/admin";
  */
 
 const ADMIN_SECTIONS = [
+  { label: "Dashboard", href: "/admin/dashboard" },
   { label: "Orders", href: "/admin/orders" },
   { label: "Products", href: "/admin/products" },
   { label: "Categories", href: "/admin/categories" },

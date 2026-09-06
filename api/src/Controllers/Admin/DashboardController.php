@@ -47,16 +47,27 @@ final class DashboardController extends Controller
 
     /**
      * Get overview stats: total sales, orders, customers.
+     *
+     * "Realized" order definition (shared with top_products + sales_chart):
+     *   status != 'cancelled'
+     *   AND (payment_status = 'paid'
+     *        OR (payment_method IN ('cod','whatsapp') AND status IN ('processing','shipped','delivered')))
+     *
+     * This ensures COD/WhatsApp orders that are delivered while payment_status
+     * is still 'pending' count toward sales, while cancelled orders never do.
      */
     private function getOverviewStats(): array
     {
         $pdo = \App\Core\Database::get();
 
-        // Total sales (all paid orders)
         $stmt = $pdo->prepare("
             SELECT COALESCE(SUM(total_amount), 0) as total_sales, COUNT(*) as total_orders
             FROM orders
-            WHERE payment_status = 'paid'
+            WHERE status != 'cancelled'
+              AND (
+                payment_status = 'paid'
+                OR (payment_method IN ('cod', 'whatsapp') AND status IN ('processing', 'shipped', 'delivered'))
+              )
         ");
         $stmt->execute();
         $salesData = $stmt->fetch(\PDO::FETCH_ASSOC);
@@ -96,7 +107,7 @@ final class DashboardController extends Controller
     }
 
     /**
-     * Get top-selling products.
+     * Get top-selling products (only from realized orders).
      */
     private function getTopSellingProducts(int $limit): array
     {
@@ -113,7 +124,11 @@ final class DashboardController extends Controller
             INNER JOIN product_variants pv ON oi.product_variant_id = pv.id
             INNER JOIN products p ON pv.product_id = p.id
             INNER JOIN orders o ON oi.order_id = o.id
-            WHERE o.payment_status = 'paid'
+            WHERE o.status != 'cancelled'
+              AND (
+                o.payment_status = 'paid'
+                OR (o.payment_method IN ('cod', 'whatsapp') AND o.status IN ('processing', 'shipped', 'delivered'))
+              )
             GROUP BY p.id, p.name, p.slug
             ORDER BY units_sold DESC
             LIMIT :limit
@@ -175,7 +190,7 @@ final class DashboardController extends Controller
     }
 
     /**
-     * Get sales chart data for the last N days.
+     * Get sales chart data for the last N days (only realized orders).
      */
     private function getSalesChartData(int $days): array
     {
@@ -187,7 +202,11 @@ final class DashboardController extends Controller
                 COUNT(*) as order_count,
                 SUM(total_amount) as daily_sales
             FROM orders
-            WHERE payment_status = 'paid'
+            WHERE status != 'cancelled'
+              AND (
+                payment_status = 'paid'
+                OR (payment_method IN ('cod', 'whatsapp') AND status IN ('processing', 'shipped', 'delivered'))
+              )
               AND created_at >= DATE_SUB(CURDATE(), INTERVAL :days DAY)
             GROUP BY DATE(created_at)
             ORDER BY date ASC

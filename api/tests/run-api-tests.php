@@ -637,6 +637,126 @@ check(($cartSale['data']['lines'][0]['unit_price'] ?? '') === '80.00', 'cart val
 ], $csrfAdm);
 check($status === 201 && ($orderSale['data']['total_amount'] ?? '') === '160.00' && ($orderSale['data']['items'][0]['price_at_purchase'] ?? '') === '80.00', 'order total uses discounted sale price');
 
+// WhatsApp checkout with valid address, city, postal_code (same required fields as COD)
+[$status, , $orderWA] = httpRequest('POST', '/api/orders', [
+    'customer_name' => 'WhatsApp Buyer',
+    'phone' => '0612345678',
+    'email' => 'wabuyer@example.com',
+    'shipping_address' => '123 WA St',
+    'city' => 'Casa',
+    'postal_code' => '20000',
+    'payment_method' => 'whatsapp',
+    'items' => [['variant_id' => $saleVariantId, 'quantity' => 1]],
+], $csrfAdm);
+check($status === 201 && ($orderWA['data']['total_amount'] ?? '') === '80.00' && ($orderWA['data']['payment_method'] ?? '') === 'whatsapp', 'whatsapp order with valid address/city/postal_code -> 201');
+
+// --- Dashboard realized order rule (COD/WhatsApp pending delivered counts) -----
+// Overview, sales_chart and top_products must count a delivered COD/WhatsApp
+// order even while payment_status is still 'pending', but must always exclude
+// cancelled orders. order_status_breakdown and recent_orders show all orders.
+
+[$status, , $dashBefore] = httpRequest('GET', '/api/admin/dashboard-stats', null, $adminToken);
+check($status === 200 && isset($dashBefore['data']['overview']), 'dashboard stats reachable before realized-order checks');
+
+// Snapshot before inserts.
+$overviewBefore = $dashBefore['data']['overview'];
+$salesBefore = (float) ($overviewBefore['total_sales'] ?? 0);
+$ordersBefore = (int) ($overviewBefore['total_orders'] ?? 0);
+$today = (string) $pdo->query('SELECT CURDATE()')->fetchColumn();
+// Helper to find today entry in sales_chart.
+$findToday = static function (array $chart, string $day): ?array {
+    foreach ($chart as $row) {
+        if (($row['date'] ?? '') === $day) return $row;
+    }
+    return null;
+};
+$chartBefore = $dashBefore['data']['sales_chart'] ?? [];
+$rowBefore = $findToday($chartBefore, $today);
+$chartSalesBefore = $rowBefore !== null ? (float) ($rowBefore['sales'] ?? 0) : 0.0;
+$chartCountBefore = $rowBefore !== null ? (int) ($rowBefore['order_count'] ?? 0) : 0;
+
+$breakdownBefore = $dashBefore['data']['order_status_breakdown'] ?? [];
+$deliveredBefore = (int) ($breakdownBefore['delivered'] ?? 0);
+$pendingBefore = (int) ($breakdownBefore['pending'] ?? 0);
+$cancelledBefore = (int) ($breakdownBefore['cancelled'] ?? 0);
+
+// Top product (Test Tee id=1) snapshot.
+$topBefore = $dashBefore['data']['top_products'] ?? [];
+$unitsBefore = 0; $revBefore = 0.0;
+foreach ($topBefore as $tp) {
+    if ((int) ($tp['id'] ?? 0) === 1) { $unitsBefore = (int) ($tp['units_sold'] ?? 0); $revBefore = (float) ($tp['revenue'] ?? 0); break; }
+}
+
+// 1) Insert a delivered COD order whose payment_status is still pending — must be REALIZED.
+$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, shipping_address, city, postal_code, customer_name, phone, email, payment_method, payment_status, created_at) VALUES (NULL, 'delivered', '100.00', '123 Test St', 'Casa', '20000', 'Dash COD Pending', '0612345678', 'dashcod@test.com', 'cod', 'pending', NOW())")->execute();
+$oid1 = (int) $pdo->lastInsertId();
+$pdo->prepare("INSERT INTO order_items (order_id, product_variant_id, quantity, price_at_purchase) VALUES (:oid, 1, 1, '100.00')")->execute([':oid' => $oid1]);
+
+[$status, , $dash1] = httpRequest('GET', '/api/admin/dashboard-stats', null, $adminToken);
+check($status === 200, 'dashboard after delivered COD pending -> 200');
+check(abs((float)($dash1['data']['overview']['total_sales'] ?? 0) - ($salesBefore + 100.0)) < 0.01, 'delivered COD pending counts toward total_sales');
+check((int)($dash1['data']['overview']['total_orders'] ?? 0) === $ordersBefore + 1, 'delivered COD pending counts toward total_orders (realized count)');
+$chart1 = $dash1['data']['sales_chart'] ?? [];
+$row1 = $findToday($chart1, $today);
+check($row1 !== null && abs((float)($row1['sales'] ?? 0) - ($chartSalesBefore + 100.0)) < 0.01, 'delivered COD pending appears in sales_chart daily_sales');
+check($row1 !== null && (int)($row1['order_count'] ?? 0) === $chartCountBefore + 1, 'delivered COD pending increments sales_chart order_count');
+$foundTop1 = false;
+foreach (($dash1['data']['top_products'] ?? []) as $tp) {
+    if ((int)($tp['id'] ?? 0) === 1 && (int)($tp['units_sold'] ?? 0) === $unitsBefore + 1 && abs((float)($tp['revenue'] ?? 0) - ($revBefore + 100.0)) < 0.01) { $foundTop1 = true; break; }
+}
+check($foundTop1, 'delivered COD pending increments top_products units/revenue');
+check((int)(($dash1['data']['order_status_breakdown']['delivered'] ?? 0)) === $deliveredBefore + 1, 'order_status_breakdown includes delivered COD pending (shows all)');
+$recentIds1 = array_column($dash1['data']['recent_orders'] ?? [], 'id');
+check(in_array($oid1, $recentIds1, true), 'recent_orders includes delivered COD pending (shows all)');
+
+// 2) Insert a pending COD order whose status is still pending — must NOT be realized.
+$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, shipping_address, city, postal_code, customer_name, phone, email, payment_method, payment_status, created_at) VALUES (NULL, 'pending', '77.77', '123 Test St', 'Casa', '20000', 'Dash Pending Cod', '0612345678', 'dashpending@test.com', 'cod', 'pending', NOW())")->execute();
+$oid2 = (int) $pdo->lastInsertId();
+$pdo->prepare("INSERT INTO order_items (order_id, product_variant_id, quantity, price_at_purchase) VALUES (:oid, 1, 1, '77.77')")->execute([':oid' => $oid2]);
+
+[$status, , $dash2] = httpRequest('GET', '/api/admin/dashboard-stats', null, $adminToken);
+check($status === 200, 'dashboard after pending COD pending -> 200');
+check(abs((float)($dash2['data']['overview']['total_sales'] ?? 0) - ($salesBefore + 100.0)) < 0.01, 'pending COD pending does NOT affect total_sales');
+check((int)($dash2['data']['overview']['total_orders'] ?? 0) === $ordersBefore + 1, 'pending COD pending does NOT affect total_orders');
+$chart2 = $dash2['data']['sales_chart'] ?? [];
+$row2 = $findToday($chart2, $today);
+check($row2 !== null && abs((float)($row2['sales'] ?? 0) - ($chartSalesBefore + 100.0)) < 0.01, 'pending COD pending does NOT affect sales_chart');
+check((int)(($dash2['data']['order_status_breakdown']['pending'] ?? 0)) === $pendingBefore + 1, 'order_status_breakdown increments pending (shows all)');
+check(in_array($oid2, array_column($dash2['data']['recent_orders'] ?? [], 'id'), true), 'recent_orders includes pending COD pending (shows all)');
+
+// 3) Insert a cancelled COD order with payment_status pending and status cancelled — must NOT be realized.
+$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, shipping_address, city, postal_code, customer_name, phone, email, payment_method, payment_status, created_at) VALUES (NULL, 'cancelled', '88.88', '123 Test St', 'Casa', '20000', 'Dash Cancelled', '0612345678', 'dashcancel@test.com', 'cod', 'pending', NOW())")->execute();
+$oid3 = (int) $pdo->lastInsertId();
+$pdo->prepare("INSERT INTO order_items (order_id, product_variant_id, quantity, price_at_purchase) VALUES (:oid, 1, 1, '88.88')")->execute([':oid' => $oid3]);
+
+[$status, , $dash3] = httpRequest('GET', '/api/admin/dashboard-stats', null, $adminToken);
+check($status === 200, 'dashboard after cancelled COD pending -> 200');
+check(abs((float)($dash3['data']['overview']['total_sales'] ?? 0) - ($salesBefore + 100.0)) < 0.01, 'cancelled order excluded from total_sales even with COD');
+check((int)($dash3['data']['overview']['total_orders'] ?? 0) === $ordersBefore + 1, 'cancelled order excluded from total_orders');
+check((int)(($dash3['data']['order_status_breakdown']['cancelled'] ?? 0)) === $cancelledBefore + 1, 'order_status_breakdown increments cancelled (shows all)');
+
+// 4) Insert a delivered WhatsApp order with payment_status pending — must be REALIZED and increment again.
+$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, shipping_address, city, postal_code, customer_name, phone, email, payment_method, payment_status, created_at) VALUES (NULL, 'delivered', '55.00', '123 Test St', 'Casa', '20000', 'Dash WA Pending', '0612345678', 'dashwa@test.com', 'whatsapp', 'pending', NOW())")->execute();
+$oid4 = (int) $pdo->lastInsertId();
+$pdo->prepare("INSERT INTO order_items (order_id, product_variant_id, quantity, price_at_purchase) VALUES (:oid, 1, 1, '55.00')")->execute([':oid' => $oid4]);
+
+[$status, , $dash4] = httpRequest('GET', '/api/admin/dashboard-stats', null, $adminToken);
+check($status === 200, 'dashboard after delivered WhatsApp pending -> 200');
+check(abs((float)($dash4['data']['overview']['total_sales'] ?? 0) - ($salesBefore + 155.0)) < 0.01, 'delivered WhatsApp pending counts toward total_sales (+55)');
+check((int)($dash4['data']['overview']['total_orders'] ?? 0) === $ordersBefore + 2, 'delivered WhatsApp pending increments total_orders (realized) to +2');
+$chart4 = $dash4['data']['sales_chart'] ?? [];
+$row4 = $findToday($chart4, $today);
+check($row4 !== null && abs((float)($row4['sales'] ?? 0) - ($chartSalesBefore + 155.0)) < 0.01, 'delivered WhatsApp pending appears in sales_chart');
+check($row4 !== null && (int)($row4['order_count'] ?? 0) === $chartCountBefore + 2, 'delivered WhatsApp pending increments chart count to +2');
+
+// 5) Verify that a processing COD pending also counts (edge of realized set) — processing is in the list.
+$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, shipping_address, city, postal_code, customer_name, phone, email, payment_method, payment_status, created_at) VALUES (NULL, 'processing', '40.00', '123 Test St', 'Casa', '20000', 'Dash Processing Cod', '0612345678', 'dashproc@test.com', 'cod', 'pending', NOW())")->execute();
+$oid5 = (int) $pdo->lastInsertId();
+$pdo->prepare("INSERT INTO order_items (order_id, product_variant_id, quantity, price_at_purchase) VALUES (:oid, 1, 1, '40.00')")->execute([':oid' => $oid5]);
+[$status, , $dash5] = httpRequest('GET', '/api/admin/dashboard-stats', null, $adminToken);
+check($status === 200, 'dashboard after processing COD pending -> 200');
+check(abs((float)($dash5['data']['overview']['total_sales'] ?? 0) - ($salesBefore + 195.0)) < 0.01, 'processing COD pending counts toward total_sales');
+
 // --- Error-response safety ------------------------------------------------
 [, , $nf] = httpRequest('GET', '/api/nonexistent-route');
 check(($nf['error'] ?? '') === 'Route not found' && count($nf) === 1, 'unknown route -> single generic error key');
