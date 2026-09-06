@@ -19,6 +19,26 @@ const inputClass =
 const errorClass =
   "mt-1 block w-full rounded-lg border border-red-400 px-3 py-3 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-red-500 focus:outline-none";
 
+const FIELD_LABELS: Record<string, string> = {
+  name: "Full name",
+  phone: "Phone",
+  email: "Email",
+  address: "Shipping address",
+  city: "City",
+  postalCode: "Postal code",
+};
+
+const FIELD_IDS: Record<string, string> = {
+  name: "checkout-name",
+  phone: "checkout-phone",
+  email: "checkout-email",
+  address: "checkout-address",
+  city: "checkout-city",
+  postalCode: "checkout-postal",
+};
+
+const FIELD_ORDER = ["name", "phone", "email", "address", "city", "postalCode"] as const;
+
 function paymentLabel(method: string): string {
   if (method === "cod") return "Cash on Delivery";
   if (method === "whatsapp") return "Order via WhatsApp";
@@ -174,7 +194,28 @@ export default function CheckoutForm() {
       next.postalCode = "Please enter your postal code.";
     }
     setErrors(next);
-    return Object.keys(next).length === 0;
+    const hasErrors = Object.keys(next).length > 0;
+    if (hasErrors) {
+      const firstKey = FIELD_ORDER.find((key) => key in next);
+      if (firstKey) {
+        const id = FIELD_IDS[firstKey];
+        // Defer until after React has flushed the error messages to the DOM.
+        setTimeout(() => {
+          const el = document.getElementById(id);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+            // Focus without causing an extra jump; the scroll above already
+            // brought the field into view.
+            try {
+              (el as HTMLElement).focus({ preventScroll: true } as FocusOptions);
+            } catch {
+              (el as HTMLElement).focus();
+            }
+          }
+        }, 50);
+      }
+    }
+    return !hasErrors;
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -466,6 +507,41 @@ export default function CheckoutForm() {
               >
                 Review your cart
               </Link>
+            </div>
+          ) : null}
+
+          {Object.keys(errors).length > 0 ? (
+            <div
+              id="checkout-validation-summary"
+              role="alert"
+              aria-live="assertive"
+              className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-900"
+            >
+              <p className="font-medium">Please correct the highlighted fields before placing your order.</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {FIELD_ORDER.filter((key) => key in errors).map((key) => (
+                  <li key={key}>
+                    <a
+                      href={`#${FIELD_IDS[key]}`}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        const el = document.getElementById(FIELD_IDS[key]);
+                        if (el) {
+                          el.scrollIntoView({ behavior: "smooth", block: "center" });
+                          try {
+                            (el as HTMLElement).focus({ preventScroll: true } as FocusOptions);
+                          } catch {
+                            (el as HTMLElement).focus();
+                          }
+                        }
+                      }}
+                      className="underline underline-offset-2 hover:text-red-700"
+                    >
+                      {FIELD_LABELS[key]}: {errors[key]}
+                    </a>
+                  </li>
+                ))}
+              </ul>
             </div>
           ) : null}
 

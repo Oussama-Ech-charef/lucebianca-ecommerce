@@ -105,11 +105,13 @@ export function fetchOrder(id: number | string) {
  * POST /api/cart — validates each cart line against live stock and prices.
  * Called by the checkout form on load and again at submit time.
  */
-export function validateCart(
+export async function validateCart(
   items: { variant_id: number; quantity: number; unit_price?: number }[],
 ) {
+  const csrfToken = await fetchCsrfToken();
   return api<CartValidationResponse>("/api/cart", {
     method: "POST",
+    headers: { "X-CSRF-Token": csrfToken },
     body: { items },
   });
 }
@@ -123,7 +125,7 @@ export function validateCart(
  * attributes the order to the customer (orders.user_id) so it appears on
  * /account; a guest checkout sends no token and stays anonymous.
  */
-export function placeOrder(
+export async function placeOrder(
   payload: {
     customer_name: string;
     phone: string;
@@ -136,8 +138,10 @@ export function placeOrder(
   },
   token?: string,
 ) {
+  const csrfToken = await fetchCsrfToken();
   return api<{ data: OrderDetail }>("/api/orders", {
     method: "POST",
+    headers: { "X-CSRF-Token": csrfToken },
     body: payload,
     token,
   });

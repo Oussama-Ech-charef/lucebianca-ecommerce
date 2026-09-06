@@ -8,22 +8,8 @@
 --          remain valid; new orders must supply real values (validated in
 --          OrderService).
 
--- city
-SET @city_exists := (
-  SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
-  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND COLUMN_NAME = 'city'
-);
-SET @sql := IF(@city_exists = 0,
-  "ALTER TABLE orders ADD COLUMN city VARCHAR(100) NOT NULL DEFAULT '' AFTER shipping_address",
-  'SELECT 1');
-PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
-
--- postal_code
-SET @postal_exists := (
-  SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
-  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND COLUMN_NAME = 'postal_code'
-);
-SET @sql := IF(@postal_exists = 0,
-  "ALTER TABLE orders ADD COLUMN postal_code VARCHAR(20) NOT NULL DEFAULT '' AFTER city",
-  'SELECT 1');
-PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+-- Idempotent, phpMyAdmin-compatible (no PREPARE/EXECUTE) — MySQL 8.0.23+
+-- supports ADD COLUMN IF NOT EXISTS, so re-running the file never errors
+-- and preserves column order via AFTER.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS city VARCHAR(100) NOT NULL DEFAULT '' AFTER shipping_address;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS postal_code VARCHAR(20) NOT NULL DEFAULT '' AFTER city;
