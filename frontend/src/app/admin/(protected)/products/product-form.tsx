@@ -4,13 +4,14 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
-import type { Product } from "@/lib/types";
+import type { Product, ProductImage } from "@/lib/types";
 import type { Category } from "@/lib/types";
 import {
   adminRequest,
   clearAdminSession,
   getAdminSession,
 } from "@/lib/admin";
+import { fetchCsrfToken } from "@/lib/api";
 
 type Variant = {
   id?: number;
@@ -26,12 +27,16 @@ type AdminProductsResponse = {
 };
 
 type ProductDetailResponse = {
-  data: Product & { variants: Variant[] };
+  data: Product & { variants: Variant[]; images?: ProductImage[] };
 };
 
 type ProductFormProps = {
   productId?: number;
 };
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8090";
 
 export default function ProductForm({ productId }: ProductFormProps) {
   const router = useRouter();
@@ -64,6 +69,172 @@ export default function ProductForm({ productId }: ProductFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [variantErrors, setVariantErrors] = useState<Record<string, string>>({});
+
+  // --- Image upload state ---
+  const [existingImages, setExistingImages] = useState<ProductImage[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [selectedPreviews, setSelectedPreviews] = useState<string[]>([]);
+  const [mainSelectedIndex, setMainSelectedIndex] = useState<number | null>(null);
+  const [imageUploading, setImageUploading] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [imageSuccess, setImageSuccess] = useState<string | null>(null);
+
+  // Preview object URLs for selected files — revokes on change/unmount to avoid leaks
+  useEffect(() => {
+    if (selectedFiles.length === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing derived preview urls when files empty
+      setSelectedPreviews([]);
+      return;
+    }
+    const urls = selectedFiles.map((file) => URL.createObjectURL(file));
+    setSelectedPreviews(urls);
+    return () => {
+      urls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [selectedFiles]);
+
+  function handleFilesSelected(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    // Reset input so same file can be re-selected after removal
+    event.target.value = "";
+    if (files.length === 0) return;
+
+    setImageSuccess(null);
+    const valid: File[] = [];
+    const rejected: string[] = [];
+
+    for (const file of files) {
+      if (file.size === 0) {
+        rejected.push(`${file.name}: empty file`);
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        rejected.push(`${file.name}: exceeds 5 MB`);
+        continue;
+      }
+      const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+      const allowedExtensions = ["jpg", "jpeg", "png", "webp", "gif"];
+      const mimeAllowed = ALLOWED_MIME_TYPES.includes(file.type);
+      const extAllowed = allowedExtensions.includes(extension);
+      // Strict MIME check; fall back to extension when browser omits MIME (e.g. type === "")
+      const isAllowed = file.type ? mimeAllowed : extAllowed;
+      if (!isAllowed) {
+        rejected.push(`${file.name}: invalid type (allowed JPEG, PNG, WebP, GIF)`);
+        continue;
+      }
+      valid.push(file);
+    }
+
+    if (rejected.length > 0) {
+      setImageError(`Some files were rejected: ${rejected.join(", ")}`);
+    } else {
+      setImageError(null);
+    }
+
+    if (valid.length > 0) {
+      setSelectedFiles((prev) => [...prev, ...valid]);
+    }
+  }
+
+  function removeSelectedFile(index: number) {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+    setMainSelectedIndex((prev) => {
+      if (prev === null) return null;
+      if (prev === index) return null;
+      if (prev > index) return prev - 1;
+      return prev;
+    });
+    setImageError(null);
+    setImageSuccess(null);
+  }
+
+  async function handleImageUpload() {
+    if (!isEdit || productId === undefined) {
+      setImageError("Save the product first before uploading images.");
+      return;
+    }
+    if (selectedFiles.length === 0) {
+      setImageError("Select at least one image to upload.");
+      return;
+    }
+
+    const session = getAdminSession();
+    if (session === null) {
+      setImageError("Your session has expired. Please sign in again.");
+      clearAdminSession();
+      router.replace("/admin/login");
+      return;
+    }
+
+    setImageUploading(true);
+    setImageError(null);
+    setImageSuccess(null);
+
+    try {
+      const csrfToken = await fetchCsrfToken();
+      const formData = new FormData();
+      selectedFiles.forEach((file) => {
+        formData.append("images[]", file);
+      });
+      if (mainSelectedIndex !== null) {
+        formData.append("is_main", String(mainSelectedIndex));
+      }
+
+      const response = await fetch(`${API_BASE}/api/admin/products/${productId}/images`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.token}`,
+          "X-CSRF-Token": csrfToken,
+        },
+        body: formData,
+      });
+
+      if (response.status === 401) {
+        setImageError("Your session has expired. Please sign in again.");
+        clearAdminSession();
+        router.replace("/admin/login");
+        return;
+      }
+
+      const result = await response.json().catch(() => null);
+
+      if (response.ok) {
+        const returnedImages: ProductImage[] =
+          (result?.data?.images as ProductImage[]) ?? [];
+        if (returnedImages.length > 0) {
+          setExistingImages((prev) => [...prev, ...returnedImages]);
+        } else {
+          // Fallback: re-fetch product to get fresh images
+          try {
+            const refetch = await adminRequest(`/api/admin/products/${productId}`, session);
+            if (refetch.ok) {
+              const detail: ProductDetailResponse = await refetch.json();
+              if (Array.isArray(detail.data.images)) {
+                setExistingImages(detail.data.images as ProductImage[]);
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
+        setSelectedFiles([]);
+        setMainSelectedIndex(null);
+        setImageSuccess(
+          `Uploaded ${returnedImages.length || selectedFiles.length} image(s) successfully.`
+        );
+      } else if (response.status === 422) {
+        const errs = result?.errors as Record<string, string> | undefined;
+        const firstErr = errs ? Object.values(errs)[0] : null;
+        setImageError(firstErr || result?.error || "Validation failed. Check file types and sizes.");
+      } else {
+        setImageError(result?.error || "Failed to upload images.");
+      }
+    } catch (err) {
+      setImageError(err instanceof Error ? err.message : "Failed to upload images.");
+    } finally {
+      setImageUploading(false);
+    }
+  }
 
   useEffect(() => {
     async function fetchCategories() {
@@ -147,6 +318,9 @@ export default function ProductForm({ productId }: ProductFormProps) {
           setMetaDescription(product.meta_description || "");
           if (Array.isArray(product.variants)) {
             setExistingVariants(product.variants as Variant[]);
+          }
+          if (Array.isArray(product.images)) {
+            setExistingImages(product.images as ProductImage[]);
           }
         } else {
           // Fallback to list endpoint for backwards compatibility
@@ -441,7 +615,12 @@ export default function ProductForm({ productId }: ProductFormProps) {
       }
 
       if (response.ok) {
-        router.push("/admin/products");
+        const result = await response.json().catch(() => null);
+        if (!isEdit && result?.data?.id) {
+          router.push(`/admin/products/${result.data.id}`);
+        } else {
+          router.push("/admin/products");
+        }
       } else if (response.status === 422) {
         const result = await response.json();
         setErrors(result.errors || {});
@@ -631,6 +810,185 @@ export default function ProductForm({ productId }: ProductFormProps) {
             />
             <span className="text-sm font-medium">Active</span>
           </label>
+        </div>
+
+        {/* Images — upload after product exists; backend uses multipart POST /api/admin/products/{id}/images */}
+        <div>
+          <h2 className="text-lg font-medium">Images</h2>
+          <p className="mt-1 text-xs text-neutral-500">
+            JPEG, PNG, WebP, GIF — max 5 MB per image. First upload becomes the main image if none exists.
+          </p>
+
+          {!isEdit ? (
+            <div className="mt-3 rounded-lg border border-dashed border-neutral-300 bg-neutral-50 p-6 text-center">
+              <p className="text-sm font-medium text-neutral-700">Save the product first</p>
+              <p className="mt-1 text-xs text-neutral-500">
+                Product images can be uploaded after the product is created.
+              </p>
+              <div className="mt-4">
+                <label
+                  htmlFor="images-disabled"
+                  className="inline-flex cursor-not-allowed items-center rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm text-neutral-400"
+                >
+                  Choose images
+                </label>
+                <input
+                  id="images-disabled"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif"
+                  multiple
+                  disabled
+                  className="hidden"
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="mt-3 space-y-4 rounded-lg border border-neutral-200 p-4">
+              {/* Existing product images */}
+              {existingImages.length > 0 && (
+                <div>
+                  <p className="mb-2 text-sm font-medium text-neutral-700">
+                    Existing images ({existingImages.length})
+                  </p>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {existingImages.map((img) => (
+                      <div
+                        key={img.id}
+                        className="relative overflow-hidden rounded-lg border border-neutral-200 bg-white"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={img.image_url}
+                          alt="Product image"
+                          className="h-32 w-full object-cover"
+                        />
+                        <div className="flex items-center justify-between px-2 py-1.5">
+                          <span className="text-xs text-neutral-600">Order: {img.sort_order}</span>
+                          {img.is_main === 1 && (
+                            <span className="rounded bg-neutral-900 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                              Main
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {existingImages.length === 0 && (
+                <p className="text-sm text-neutral-500">No images yet. Add some below.</p>
+              )}
+
+              {/* File input */}
+              <div>
+                <label htmlFor="images" className={labelClass}>
+                  Add images
+                </label>
+                <input
+                  id="images"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif"
+                  multiple
+                  onChange={handleFilesSelected}
+                  disabled={imageUploading}
+                  className="block w-full cursor-pointer rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm file:mr-3 file:rounded file:border-0 file:bg-neutral-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <p className="mt-1 text-xs text-neutral-500">
+                  Select one or multiple images. Invalid types or files over 5 MB are rejected before upload.
+                </p>
+              </div>
+
+              {/* Selected-file previews before upload */}
+              {selectedFiles.length > 0 && (
+                <div>
+                  <p className="mb-2 text-sm font-medium text-neutral-700">
+                    Selected ({selectedFiles.length}) — previews
+                  </p>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {selectedFiles.map((file, index) => (
+                      <div
+                        key={`${file.name}-${index}`}
+                        className="relative overflow-hidden rounded-lg border border-neutral-200 bg-white"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={selectedPreviews[index]}
+                          alt={`Preview ${file.name}`}
+                          className="h-32 w-full object-cover"
+                        />
+                        <div className="space-y-1.5 px-2 py-2">
+                          <p className="truncate text-xs text-neutral-600" title={file.name}>
+                            {file.name}
+                          </p>
+                          <p className="text-xs text-neutral-500">
+                            {(file.size / 1024).toFixed(0)} KB · {file.type || "unknown type"}
+                          </p>
+                          <label className="flex items-center gap-1.5 text-xs font-medium text-neutral-700">
+                            <input
+                              type="radio"
+                              name="main-image"
+                              checked={mainSelectedIndex === index}
+                              onChange={() => setMainSelectedIndex(index)}
+                              className="h-3.5 w-3.5"
+                            />
+                            Main image
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => removeSelectedFile(index)}
+                            className="text-xs text-red-600 hover:underline"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Upload controls & states */}
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleImageUpload}
+                  disabled={imageUploading || selectedFiles.length === 0}
+                  className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {imageUploading ? "Uploading..." : `Upload ${selectedFiles.length > 0 ? `(${selectedFiles.length})` : ""}`}
+                </button>
+                {selectedFiles.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedFiles([]);
+                      setMainSelectedIndex(null);
+                      setImageError(null);
+                      setImageSuccess(null);
+                    }}
+                    disabled={imageUploading}
+                    className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                  >
+                    Clear selection
+                  </button>
+                )}
+                {imageUploading && (
+                  <span className="text-sm text-neutral-500">Upload in progress…</span>
+                )}
+              </div>
+
+              {imageError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {imageError}
+                </div>
+              )}
+              {imageSuccess && (
+                <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
+                  {imageSuccess}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Variants section — shown in both create and edit, with different behavior */}
