@@ -1,16 +1,20 @@
 /**
  * WhatsApp deep links for the storefront.
  *
- * WHATSAPP_NUMBER is a placeholder — replace with the store's real number
- * before launch. International format: 212XXXXXXXXX.
- *
- * Used by the floating chat button and by the checkout's "Order via
- * WhatsApp" payment method (spec 3.7).
+ * WHATSAPP_NUMBER is a fallback placeholder — the live number is stored
+ * in `settings.whatsapp_number` (admin: Store Info → WhatsApp Number) and
+ * exposed via GET /api/settings/public. International format: 212XXXXXXXXX.
+ * Centralized fallback lives in `lib/config.ts` (`WHATSAPP_FALLBACK`) to keep
+ * TODOs in one launch checklist; this re-export keeps existing imports working.
+ * Runtime consumers should prefer `whatsapp_number` from public settings.
  */
-export const WHATSAPP_NUMBER = "212612345678";
+import { WHATSAPP_FALLBACK } from "./config";
 
-export function buildWhatsAppLink(message: string): string {
-  return `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
+export const WHATSAPP_NUMBER = WHATSAPP_FALLBACK;
+
+export function buildWhatsAppLink(message: string, number?: string): string {
+  const normalized = (number ?? WHATSAPP_FALLBACK).replace(/[^0-9]/g, "");
+  return `https://wa.me/${normalized}?text=${encodeURIComponent(message)}`;
 }
 
 export const WHATSAPP_GENERIC_MESSAGE =

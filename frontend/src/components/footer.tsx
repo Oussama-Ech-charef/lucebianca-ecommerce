@@ -2,18 +2,11 @@ import Image from "next/image";
 import Link from "next/link";
 
 import NewsletterForm from "@/components/newsletter-form";
+import { SOCIAL_LINKS } from "@/lib/config";
 
 // Footer link groups. Help & Info pages are phase 14 (static/semi-static
 // info + legal pages); the storefront is deliberately limited to real routes.
 const SHOP_LINKS = [{ label: "Shop", href: "/shop" }];
-
-// Social media URLs — TODO: Replace placeholders with real Luce Bianca
-// business URLs before production (e.g., https://instagram.com/lucebianca.ma).
-const SOCIAL_LINKS = {
-  instagram: "#",
-  facebook: "#",
-  x: "#",
-};
 
 const INFO_LINKS = [
   { label: "About", href: "/about" },

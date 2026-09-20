@@ -3,18 +3,14 @@ import type { Metadata } from "next";
 /**
  * /size-guide — fit chart in centimeters per size (spec section 6).
  *
- * TODO (owner): these measurements are REASONABLE PLACEHOLDERS. Replace them
- * with the real garment measurements (measured flat across the chest, length
- * from shoulder to hem, shoulder width, sleeve length) once the sample sizes
- * are measured. Fits in this store are intentionally oversized.
+ * Centralized fallback in `lib/config.ts` (`SIZE_CHART_FALLBACK`).
+ * TODO (owner): replace with real garment measurements (flat chest/length/
+ * shoulder/sleeve) once samples are measured. Visual design preserved.
  */
+import { SIZE_CHART_FALLBACK } from "@/lib/config";
+
 const SIZE_CHART: { size: string; chest: string; length: string; shoulder: string; sleeve: string }[] = [
-  { size: "XS",  chest: "94", length: "68", shoulder: "44", sleeve: "20" },
-  { size: "S",   chest: "102", length: "71", shoulder: "47", sleeve: "21" },
-  { size: "M",   chest: "110", length: "74", shoulder: "50", sleeve: "22" },
-  { size: "L",   chest: "118", length: "77", shoulder: "53", sleeve: "23" },
-  { size: "XL",  chest: "126", length: "80", shoulder: "56", sleeve: "24" },
-  { size: "XXL", chest: "134", length: "83", shoulder: "59", sleeve: "25" },
+  ...SIZE_CHART_FALLBACK,
 ];
 
 export const metadata: Metadata = { title: "Size guide" };

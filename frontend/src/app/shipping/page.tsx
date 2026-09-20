@@ -4,20 +4,20 @@ import type { Metadata } from "next";
  * /shipping — supported regions, costs, timelines and the free-shipping
  * threshold (spec section 6).
  *
- * TODO (phase 15): these values are REASONABLE PLACEHOLDERS. The spec puts
- * shipping settings in /admin/settings (supported regions, cost per region,
- * free-shipping threshold), which is not built yet — once it exists, this
- * page must read the live settings table instead of this hardcoded list.
+ * Centralized fallback in `lib/config.ts` (`SHIPPING_FALLBACK` +
+ * `FREE_SHIPPING_THRESHOLD_FALLBACK`). Live values come from
+ * `GET /api/settings/public` (`shipping_cost`, `free_shipping_threshold`)
+ * once admin configures them; until then this placeholder list is shown
+ * with an explicit “placeholders” disclosure so missing prod config
+ * fails safely (still renders, no inventing).
  */
+import { FREE_SHIPPING_THRESHOLD_FALLBACK, SHIPPING_FALLBACK } from "@/lib/config";
+
 const SHIPPING_OPTIONS: {
   region: string;
   cost: string;
   time: string;
-}[] = [
-  { region: "Casablanca", cost: "25 MAD", time: "1–2 business days" },
-  { region: "Other Moroccan cities", cost: "45 MAD", time: "2–4 business days" },
-  { region: "International", cost: "200 MAD", time: "7–14 business days" },
-];
+}[] = [...SHIPPING_FALLBACK];
 
 export const metadata: Metadata = { title: "Shipping" };
 
@@ -30,7 +30,7 @@ export default function ShippingPage() {
       </p>
 
       <div className="mt-8 rounded-lg border border-green-200 bg-green-50 px-4 py-4 text-sm text-green-700">
-        <p className="font-medium">Free shipping on orders over 500 MAD</p>
+        <p className="font-medium">Free shipping on orders over {FREE_SHIPPING_THRESHOLD_FALLBACK}</p>
         <p className="mt-1">
           Orders within Morocco qualify for free delivery when your total
           reaches the threshold.

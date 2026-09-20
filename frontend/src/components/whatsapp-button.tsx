@@ -1,12 +1,33 @@
+"use client";
+
 import {
   buildWhatsAppLink,
   WHATSAPP_GENERIC_MESSAGE,
+  WHATSAPP_NUMBER,
 } from "@/lib/whatsapp";
+import { useEffect, useState } from "react";
+
+import { fetchPublicSettings } from "@/lib/storefront";
 
 export default function WhatsAppButton() {
+  const [number, setNumber] = useState<string>(WHATSAPP_NUMBER);
+
+  useEffect(() => {
+    fetchPublicSettings()
+      .then((res) => {
+        const n = res.data?.whatsapp_number?.trim();
+        if (n) {
+          setNumber(n.replace(/[^0-9]/g, ""));
+        }
+      })
+      .catch(() => {
+        // keep fallback
+      });
+  }, []);
+
   return (
     <a
-      href={buildWhatsAppLink(WHATSAPP_GENERIC_MESSAGE)}
+      href={buildWhatsAppLink(WHATSAPP_GENERIC_MESSAGE, number)}
       target="_blank"
       rel="noopener noreferrer"
       aria-label="Chat with Luce Bianca on WhatsApp"
