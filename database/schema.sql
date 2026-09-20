@@ -2,6 +2,9 @@
 -- Luce Bianca — Database Schema
 -- Engine: InnoDB | Charset: utf8mb4 (full Arabic support)
 -- Source: lucebianca-project-full.md, section 4
+-- Snapshot for FRESH installs only (now 18 tables, +015 lookup_token).
+-- Do not replay migrations 001-015 on an empty DB.
+-- See database/migrations/README.md for the two supported paths.
 -- ============================================================
 
 CREATE DATABASE IF NOT EXISTS lucebianca
@@ -13,13 +16,19 @@ USE lucebianca;
 -- 1) users: customer accounts (Guest Checkout is available, so an account is not required)
 -- ------------------------------------------------------------
 CREATE TABLE users (
-  id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  name          VARCHAR(100)  NOT NULL,
-  email         VARCHAR(150)  NOT NULL,
-  password_hash VARCHAR(255)  NOT NULL,  -- password_hash() with bcrypt/argon2, never plain text
-  phone         VARCHAR(20)   NULL,
-  created_at    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_users_email (email)      -- prevents duplicate emails
+  id                           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name                         VARCHAR(100)  NOT NULL,
+  email                        VARCHAR(150)  NOT NULL,
+  email_verified               TINYINT(1)    NOT NULL DEFAULT 0, -- 005: 0/1 flag, Google accounts created as 1
+  google_id                    VARCHAR(255)  NULL,                -- 004: Google sub, NULL = not linked
+  password_hash                VARCHAR(255)  NOT NULL,             -- password_hash() with bcrypt/argon2, never plain text
+  phone                        VARCHAR(20)   NULL,
+  email_verification_token     VARCHAR(255)  NULL,                -- 005: single-use opaque token, unique
+  email_verification_expires_at DATETIME     NULL,                -- 005: 24 h expiry
+  created_at                   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_users_email (email),
+  UNIQUE KEY uq_users_google_id (google_id),
+  UNIQUE KEY uq_users_email_verification_token (email_verification_token)
 ) ENGINE=InnoDB;
 
 -- ------------------------------------------------------------
@@ -116,16 +125,18 @@ CREATE TABLE orders (
                      NOT NULL DEFAULT 'pending',
   total_amount     DECIMAL(10,2) NOT NULL,
   shipping_address VARCHAR(255)  NOT NULL,
-  city             VARCHAR(100)  NOT NULL,
-  postal_code      VARCHAR(20)   NOT NULL,
+  city             VARCHAR(100)  NOT NULL DEFAULT '', -- 013: separate city, default '' for existing rows
+  postal_code      VARCHAR(20)   NOT NULL DEFAULT '', -- 013: postal code, default '' for existing rows
   customer_name    VARCHAR(100)  NOT NULL,
   phone            VARCHAR(20)   NOT NULL,
-  email            VARCHAR(150)  NOT NULL,
+  email            VARCHAR(255)  NULL,                -- 009 truth: VARCHAR(255) NULL (approval: keep, no narrowing)
+  lookup_token     VARCHAR(64)   NOT NULL,            -- 015: non-guessable single-purpose token for guest lookup (hex, 64 chars)
   payment_method   ENUM('card','cod','whatsapp') NOT NULL,  -- the agreed-on options
   payment_status   ENUM('pending','paid','failed') NOT NULL DEFAULT 'pending',
   created_at       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_orders_user (user_id),
   KEY idx_orders_status (status),           -- index: fast filtering in the admin panel
+  UNIQUE KEY uq_orders_lookup_token (lookup_token),
   CONSTRAINT fk_orders_user FOREIGN KEY (user_id)
     REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
@@ -191,6 +202,7 @@ CREATE TABLE reviews (
   is_approved TINYINT(1)   NOT NULL DEFAULT 0,
   created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_reviews_product (product_id),
+  KEY idx_reviews_approved (is_approved), -- 006: optional filter on approval state (MINOR, safe to omit)
   CONSTRAINT fk_reviews_product FOREIGN KEY (product_id)
     REFERENCES products(id) ON DELETE CASCADE,
   CONSTRAINT fk_reviews_user FOREIGN KEY (user_id)
@@ -255,3 +267,37 @@ CREATE TABLE product_colors (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_product_colors_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- 17) refresh_tokens: SHA-256 hashed customer refresh tokens (002)
+--     Raw token never persisted; token_hash is SHA-256 hex, revocable via revoked_at
+-- ------------------------------------------------------------
+CREATE TABLE refresh_tokens (
+  id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id    INT UNSIGNED  NOT NULL,
+  token_hash CHAR(64)      NOT NULL,   -- SHA-256 hex digest of the refresh token
+  expires_at DATETIME      NOT NULL,   -- when the token stops being valid
+  created_at TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  revoked_at DATETIME      NULL,       -- set on logout/revocation; NULL = still valid
+  UNIQUE KEY uq_refresh_tokens_hash (token_hash),
+  KEY idx_refresh_tokens_user (user_id),  -- reused by the FK below
+  CONSTRAINT fk_refresh_tokens_user FOREIGN KEY (user_id)
+    REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ------------------------------------------------------------
+-- 18) admin_refresh_tokens: separate store for admin refresh tokens (003)
+--     admins are fully separate from users — see 003 for FK decision
+-- ------------------------------------------------------------
+CREATE TABLE admin_refresh_tokens (
+  id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  admin_id   INT UNSIGNED  NOT NULL,
+  token_hash CHAR(64)      NOT NULL,   -- SHA-256 hex digest of the refresh token
+  expires_at DATETIME      NOT NULL,   -- when the token stops being valid
+  created_at TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  revoked_at DATETIME      NULL,       -- set on logout/revocation; NULL = still valid
+  UNIQUE KEY uq_admin_refresh_tokens_hash (token_hash),
+  KEY idx_admin_refresh_tokens_admin (admin_id),
+  CONSTRAINT fk_admin_refresh_tokens_admin FOREIGN KEY (admin_id)
+    REFERENCES admins(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
