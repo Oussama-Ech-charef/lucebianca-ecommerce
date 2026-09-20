@@ -9,10 +9,13 @@
 
 declare(strict_types=1);
 
+use App\Core\ConflictException;
 use App\Core\Env;
 use App\Core\ErrorLogger;
+use App\Core\InvalidCredentialsException;
 use App\Core\Request;
 use App\Core\Response;
+use App\Core\ValidationException;
 
 require __DIR__ . '/src/autoload.php';
 
@@ -20,8 +23,55 @@ Env::load(__DIR__ . '/.env');
 
 date_default_timezone_set((string) Env::get('APP_TIMEZONE', 'Africa/Casablanca'));
 
-// --- Error handling: PHP errors become JSON 500s (JSON 400 on bad JSON body) ---
+// --- Error handling: PHP errors become JSON (4xx for expected user errors, 500 for unexpected) ---
 set_exception_handler(static function (Throwable $e): void {
+    // Expected user errors → consistent 4xx JSON, no stack trace, no SQL leak.
+    // These exceptions are thrown by Services/Repositories/Controllers for
+    // validation, duplicate, or auth failures. They must not become 500.
+    if ($e instanceof ValidationException) {
+        header('Content-Type: application/json; charset=utf-8');
+        http_response_code(422);
+        echo json_encode(
+            ['error' => $e->getMessage(), 'errors' => $e->errors()],
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        );
+        exit;
+    }
+
+    if ($e instanceof ConflictException) {
+        header('Content-Type: application/json; charset=utf-8');
+        http_response_code(409);
+        echo json_encode(
+            ['error' => $e->getMessage()],
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        );
+        exit;
+    }
+
+    if ($e instanceof InvalidCredentialsException) {
+        header('Content-Type: application/json; charset=utf-8');
+        http_response_code(401);
+        echo json_encode(
+            ['error' => $e->getMessage()],
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        );
+        exit;
+    }
+
+    // PDOException with SQLSTATE 23000 is a unique/foreign-key violation —
+    // an expected conflict (duplicate slug, SKU, size/color combo, etc.).
+    // Map it to 409 with a generic message; never expose SQL, table or column names.
+    if ($e instanceof PDOException && (string) $e->getCode() === '23000') {
+        header('Content-Type: application/json; charset=utf-8');
+        http_response_code(409);
+        echo json_encode(
+            ['error' => 'A record already exists.'],
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        );
+        exit;
+    }
+
+    // All other throwables are unexpected server errors → 500.
     $debug = Env::get('APP_DEBUG', false);
 
     // Structured server-side log of every uncaught throwable — one JSON line
