@@ -1,12 +1,14 @@
 /**
  * API client — single place where the frontend talks to the PHP API.
  *
- * Base URL comes from NEXT_PUBLIC_API_URL (see .env.example). Every call
- * returns typed JSON; non-2xx responses throw ApiError with the API's
- * error message so the UI can surface it.
+ * Base URL is centralized in `lib/config.ts` (`API_URL`); it falls back to
+ * `http://127.0.0.1:8090` so `next dev` still works if the env is missing.
+ * In production a missing `NEXT_PUBLIC_API_URL` is surfaced by
+ * `warnIfPlaceholderConfig()` instead of inventing a URL.
  */
+import { API_URL as CONFIGURED_API_URL } from "./config";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8090";
+const API_BASE_URL = CONFIGURED_API_URL;
 
 type RequestOptions = {
   method?: "GET" | "POST" | "PUT" | "DELETE";

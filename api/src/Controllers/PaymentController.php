@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use App\Core\Auth;
 use App\Core\Request;
 use App\Core\ValidationException;
 use App\Services\OrderService;
@@ -51,24 +52,27 @@ final class PaymentController extends Controller
             ]);
         }
 
-        $order = $this->orders->getOrder((int) $orderId);
+        $orderIdInt = (int) $orderId;
+        $providedToken = $this->extractLookupToken($request);
+        $authenticatedUserId = $this->authenticatedCustomerId($request);
+        $order = $this->orders->getOrderAuthorized($orderIdInt, $authenticatedUserId, $providedToken);
         if ($order === null) {
             $this->error('Order not found.', 404);
         }
 
         // Only allow payment initiation for pending payments
-        if ($order->payment_status === 'paid') {
+        if ($order->paymentStatus === 'paid') {
             $this->error('This order has already been paid.', 400);
         }
 
-        if ($order->payment_method !== 'card') {
+        if ($order->paymentMethod !== 'card') {
             $this->error('This order does not use card payment.', 400);
         }
 
         try {
             $paymentData = $this->payments->initiatePayment(
                 (int) $orderId,
-                $order->total_amount,
+                $order->totalAmount,
                 '504', // MAD currency code
                 $email
             );
@@ -108,14 +112,46 @@ final class PaymentController extends Controller
             $this->error('Order ID not found in callback.', 400);
         }
 
-        // Update order payment status
-        $order = $this->orders->updateStatus(
-            $result['order_id'],
-            ['payment_status' => $result['status']]
-        );
-
-        if ($order === null) {
+        // Verify order existence before any state checks (hide enumeration via generic 400/404)
+        $existing = $this->orders->getOrder($result['order_id']);
+        if ($existing === null) {
             $this->error('Order not found.', 404);
+        }
+
+        // Payment method must be card (prevent COD/whatsapp being marked paid via forged callback)
+        if ($existing->paymentMethod !== 'card') {
+            $this->error('Order does not use card payment.', 400);
+        }
+
+        // Amount equality: callback amount must match order total (prevent tampering, format to 2 decimals)
+        $callbackAmount = isset($result['amount']) ? (string) $result['amount'] : null;
+        if ($callbackAmount !== null && $callbackAmount !== '') {
+            $expected = number_format((float) $existing->totalAmount, 2, '.', '');
+            $received = number_format((float) $callbackAmount, 2, '.', '');
+            if ($expected !== $received) {
+                $this->error('Payment amount mismatch.', 400);
+            }
+        }
+
+        // Valid state transitions: only pending → paid/failed.
+        // Idempotency: if already in target state, treat as success without re-update (replay protection).
+        $current = $existing->paymentStatus;
+        $target = $result['status']; // 'paid' or 'failed'
+        if ($current === $target) {
+            // Idempotent replay — already in this state, return without state change.
+            $order = $existing;
+        } elseif ($current !== 'pending') {
+            $this->error('Invalid payment state transition.', 409);
+        } else {
+            // Update order payment status
+            $order = $this->orders->updateStatus(
+                $result['order_id'],
+                ['payment_status' => $target]
+            );
+
+            if ($order === null) {
+                $this->error('Order not found.', 404);
+            }
         }
 
         // Log successful payment for admin records
@@ -152,7 +188,9 @@ final class PaymentController extends Controller
             $this->error('Invalid order ID.', 400);
         }
 
-        $order = $this->orders->getOrder($orderId);
+        $providedToken = $this->extractLookupToken($request);
+        $authenticatedUserId = $this->authenticatedCustomerId($request);
+        $order = $this->orders->getOrderAuthorized($orderId, $authenticatedUserId, $providedToken);
         if ($order === null) {
             $this->error('Order not found.', 404);
         }
@@ -160,10 +198,45 @@ final class PaymentController extends Controller
         $this->json([
             'data' => [
                 'order_id' => $order->id,
-                'payment_status' => $order->payment_status,
-                'payment_method' => $order->payment_method,
-                'total_amount' => $order->total_amount,
+                'payment_status' => $order->paymentStatus,
+                'payment_method' => $order->paymentMethod,
+                'total_amount' => $order->totalAmount,
             ],
         ]);
+    }
+
+    private function extractLookupToken(Request $request): ?string
+    {
+        // Body lookup_token for POST, query token or header for GET
+        $bodyToken = $request->input('lookup_token');
+        if (is_string($bodyToken) && $bodyToken !== '') {
+            return trim($bodyToken);
+        }
+        $queryToken = $request->query('token');
+        if (is_string($queryToken) && $queryToken !== '') {
+            return trim($queryToken);
+        }
+        $header = $request->header('X-Order-Token');
+        if (is_string($header) && $header !== '') {
+            return trim($header);
+        }
+        return null;
+    }
+
+    private function authenticatedCustomerId(Request $request): ?int
+    {
+        $token = $request->bearerToken();
+        if ($token === null) {
+            return null;
+        }
+        try {
+            $claims = Auth::verify($token);
+        } catch (\RuntimeException) {
+            return null;
+        }
+        if (($claims['role'] ?? '') !== 'user' || !isset($claims['sub'])) {
+            return null;
+        }
+        return (int) $claims['sub'];
     }
 }

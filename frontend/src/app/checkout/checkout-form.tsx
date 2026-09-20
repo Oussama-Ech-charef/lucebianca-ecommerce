@@ -7,7 +7,13 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError } from "@/lib/api";
 import { useCart } from "@/lib/cart-context";
 import { fetchCustomerAccount, getCustomerSession } from "@/lib/customer-auth";
-import { formatPrice, placeOrder, validateCart } from "@/lib/storefront";
+import {
+  fetchPublicSettings,
+  formatPrice,
+  placeOrder,
+  validateCart,
+  type PublicSettings,
+} from "@/lib/storefront";
 import type { OrderDetail } from "@/lib/types";
 import type { CustomerUser } from "@/lib/types";
 import { buildWhatsAppLink } from "@/lib/whatsapp";
@@ -85,6 +91,7 @@ export default function CheckoutForm() {
   const [submitting, setSubmitting] = useState(false);
   const [customer, setCustomer] = useState<CustomerUser | null>(null);
   const [loadingCustomer, setLoadingCustomer] = useState(true);
+  const [publicSettings, setPublicSettings] = useState<PublicSettings | null>(null);
 
   const redirectingRef = useRef(false);
 
@@ -109,6 +116,15 @@ export default function CheckoutForm() {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoadingCustomer(false);
     }
+  }, []);
+
+  // Load public settings (payment toggles, WhatsApp number) — cached via storefront fetch
+  useEffect(() => {
+    fetchPublicSettings()
+      .then((res) => setPublicSettings(res.data))
+      .catch(() => {
+        // keep defaults (all enabled, fallback WhatsApp)
+      });
   }, []);
 
   // Empty-cart guard: if nothing is in the cart, go back.
@@ -173,6 +189,22 @@ export default function CheckoutForm() {
 
   const isLoggedIn = customer !== null;
 
+  // Payment toggles from settings (defaults to enabled for fresh installs)
+  const isCodEnabled = publicSettings?.payment_cod_enabled !== "0";
+  const isWhatsappEnabled = publicSettings?.payment_whatsapp_enabled !== "0";
+
+  // If the currently selected method becomes disabled via settings, switch to an enabled one
+  useEffect(() => {
+    if (!publicSettings) return;
+    if (paymentMethod === "cod" && !isCodEnabled && isWhatsappEnabled) {
+      // eslint-disable-next-line
+      setPaymentMethod("whatsapp");
+    } else if (paymentMethod === "whatsapp" && !isWhatsappEnabled && isCodEnabled) {
+      // eslint-disable-next-line
+      setPaymentMethod("cod");
+    }
+  }, [publicSettings, isCodEnabled, isWhatsappEnabled, paymentMethod]);
+
   function validate(): boolean {
     const next: Record<string, string> = {};
     if (!isLoggedIn && name.trim().length < 2) {
@@ -192,6 +224,12 @@ export default function CheckoutForm() {
     }
     if (!postalCode.trim()) {
       next.postalCode = "Please enter your postal code.";
+    }
+    if (paymentMethod === "cod" && !isCodEnabled) {
+      next.payment_method = "Cash on Delivery is currently disabled.";
+    }
+    if (paymentMethod === "whatsapp" && !isWhatsappEnabled) {
+      next.payment_method = "Order via WhatsApp is currently disabled.";
     }
     setErrors(next);
     const hasErrors = Object.keys(next).length > 0;
@@ -281,10 +319,12 @@ export default function CheckoutForm() {
       // delivery. Both tabs navigate; the confirmation page is the source of
       // truth for the order.
       if (paymentMethod === "whatsapp") {
-        window.open(buildWhatsAppLink(buildWhatsAppMessage(order)), "_blank", "noopener,noreferrer");
+        const whatsappNumber = publicSettings?.whatsapp_number?.replace(/[^0-9]/g, "");
+        window.open(buildWhatsAppLink(buildWhatsAppMessage(order), whatsappNumber), "_blank", "noopener,noreferrer");
       }
 
-      router.push(`/order-confirmation?id=${order.id}`);
+      const tokenParam = order.lookup_token ? `&token=${encodeURIComponent(order.lookup_token)}` : "";
+      router.push(`/order-confirmation?id=${order.id}${tokenParam}`);
     } catch (error) {
       setServerError(
         error instanceof ApiError
@@ -422,56 +462,63 @@ export default function CheckoutForm() {
           <section>
             <h2 className="font-serif text-lg">Payment method</h2>
             <div className="mt-4 space-y-3">
-              <label
-                className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 transition-colors ${
-                  paymentMethod === "cod"
-                    ? "border-neutral-900 bg-neutral-50"
-                    : "border-neutral-200 hover:border-neutral-400"
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="payment"
-                  value="cod"
-                  checked={paymentMethod === "cod"}
-                  onChange={() => setPaymentMethod("cod")}
-                  className="mt-1 accent-neutral-900"
-                />
-                <span>
-                  <span className="block text-sm font-medium text-neutral-900">
-                    Cash on Delivery
+              {isCodEnabled && (
+                <label
+                  className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 transition-colors ${
+                    paymentMethod === "cod"
+                      ? "border-neutral-900 bg-neutral-50"
+                      : "border-neutral-200 hover:border-neutral-400"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="payment"
+                    value="cod"
+                    checked={paymentMethod === "cod"}
+                    onChange={() => setPaymentMethod("cod")}
+                    className="mt-1 accent-neutral-900"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-neutral-900">
+                      Cash on Delivery
+                    </span>
+                    <span className="mt-0.5 block text-xs text-neutral-500">
+                      Pay in cash when your order arrives.
+                    </span>
                   </span>
-                  <span className="mt-0.5 block text-xs text-neutral-500">
-                    Pay in cash when your order arrives.
-                  </span>
-                </span>
-              </label>
+                </label>
+              )}
 
-              <label
-                className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 transition-colors ${
-                  paymentMethod === "whatsapp"
-                    ? "border-neutral-900 bg-neutral-50"
-                    : "border-neutral-200 hover:border-neutral-400"
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="payment"
-                  value="whatsapp"
-                  checked={paymentMethod === "whatsapp"}
-                  onChange={() => setPaymentMethod("whatsapp")}
-                  className="mt-1 accent-neutral-900"
-                />
-                <span>
-                  <span className="block text-sm font-medium text-neutral-900">
-                    Order via WhatsApp
+              {isWhatsappEnabled && (
+                <label
+                  className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 transition-colors ${
+                    paymentMethod === "whatsapp"
+                      ? "border-neutral-900 bg-neutral-50"
+                      : "border-neutral-200 hover:border-neutral-400"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="payment"
+                    value="whatsapp"
+                    checked={paymentMethod === "whatsapp"}
+                    onChange={() => setPaymentMethod("whatsapp")}
+                    className="mt-1 accent-neutral-900"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-neutral-900">
+                      Order via WhatsApp
+                    </span>
+                    <span className="mt-0.5 block text-xs text-neutral-500">
+                      We send your order details on WhatsApp to confirm and
+                      arrange delivery.
+                    </span>
                   </span>
-                  <span className="mt-0.5 block text-xs text-neutral-500">
-                    We send your order details on WhatsApp to confirm and
-                    arrange delivery.
-                  </span>
-                </span>
-              </label>
+                </label>
+              )}
+              {!isCodEnabled && !isWhatsappEnabled && (
+                <p className="text-sm text-red-600">All payment methods are currently disabled. Please contact the store.</p>
+              )}
 
               <div
                 aria-disabled="true"

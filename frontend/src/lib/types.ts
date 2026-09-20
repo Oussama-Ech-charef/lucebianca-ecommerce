@@ -220,6 +220,7 @@ export type OrderDetail = {
   payment_method: string;
   payment_status: PaymentStatus;
   created_at: string;
+  lookup_token?: string;
   items: OrderLineItem[];
 };
 

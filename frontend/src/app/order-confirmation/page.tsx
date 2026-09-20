@@ -8,13 +8,16 @@ import type { OrderDetail } from "@/lib/types";
 import ClearCart from "./clear-cart";
 import GuestRegistrationPrompt from "./guest-registration-prompt";
 
-type PageProps = { searchParams: Promise<{ id?: string | string[] }> };
+type PageProps = { searchParams: Promise<{ id?: string | string[]; token?: string | string[] }> };
 
 // Shared by generateMetadata and the page so the API is hit once per request.
+// Guest orders require the single-purpose lookup token; owned orders allow
+// either token or authenticated ownership (server component has no auth here,
+// so we rely on token for guest).
 const getOrder = cache(
-  async (id: string): Promise<OrderDetail | null> => {
+  async (id: string, token?: string): Promise<OrderDetail | null> => {
     try {
-      const response = await fetchOrder(id);
+      const response = await fetchOrder(id, token);
       return response.data;
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
@@ -59,26 +62,28 @@ function NotFoundState() {
 }
 
 export async function generateMetadata({ searchParams }: PageProps): Promise<Metadata> {
-  const { id } = await searchParams;
+  const { id, token } = await searchParams;
   const value = Array.isArray(id) ? id[0] : id;
+  const tokenValue = Array.isArray(token) ? token[0] : token;
   if (!value) {
     return { title: "Order not found" };
   }
-  const order = await getOrder(value);
+  const order = await getOrder(value, tokenValue);
   return {
     title: order ? `Order #${order.id} — confirmed` : "Order not found",
   };
 }
 
 export default async function ConfirmationPage({ searchParams }: PageProps) {
-  const { id } = await searchParams;
+  const { id, token } = await searchParams;
   const value = Array.isArray(id) ? id[0] : id;
+  const tokenValue = Array.isArray(token) ? token[0] : token;
 
   if (!value) {
     return <NotFoundState />;
   }
 
-  const order = await getOrder(value);
+  const order = await getOrder(value, tokenValue);
   if (!order) {
     return <NotFoundState />;
   }

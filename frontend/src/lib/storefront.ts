@@ -95,10 +95,16 @@ export function fetchSpecialOffers(limit = 8) {
 
 /**
  * GET /api/orders/{id} — a single order with its lines, for the order
- * confirmation page. Throws ApiError(404) when the order does not exist.
+ * confirmation page. Guest lookup requires the single-purpose
+ * `lookup_token` (query `?token=` or header `X-Order-Token`); owned
+ * orders (user_id) also allow authenticated ownership via Bearer token.
+ * Throws ApiError(404) when not found or not authorized (to hide existence).
  */
-export function fetchOrder(id: number | string) {
-  return api<{ data: OrderDetail }>(`/api/orders/${encodeURIComponent(String(id))}`);
+export function fetchOrder(id: number | string, lookupToken?: string, authToken?: string) {
+  const qs = lookupToken ? `?token=${encodeURIComponent(lookupToken)}` : "";
+  return api<{ data: OrderDetail }>(`/api/orders/${encodeURIComponent(String(id))}${qs}`, {
+    ...(authToken ? { token: authToken } : {}),
+  });
 }
 
 /**
@@ -170,6 +176,27 @@ export async function submitContactMessage(
     body: payload,
     ...(token ? { token } : {}),
   });
+}
+
+/**
+ * GET /api/settings/public — safe public settings for storefront (WhatsApp,
+ * payment toggles, store info). No auth, never includes secrets.
+ */
+export type PublicSettings = {
+  store_name?: string;
+  store_email?: string;
+  store_phone?: string;
+  store_address?: string;
+  whatsapp_number?: string;
+  shipping_cost?: string;
+  free_shipping_threshold?: string;
+  payment_cod_enabled?: string;
+  payment_whatsapp_enabled?: string;
+  payment_card_enabled?: string;
+};
+
+export function fetchPublicSettings() {
+  return api<{ data: PublicSettings }>("/api/settings/public", { cache: "no-store" });
 }
 
 /**

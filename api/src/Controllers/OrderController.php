@@ -102,16 +102,55 @@ final class OrderController extends Controller
     /**
      * GET /api/orders/{id} — retrieve a single order for the confirmation page.
      *
-     * @return never 200 with the order (+ items), 404 when it does not exist.
+     * Privacy: guest orders require `?token=<lookup_token>` (single-purpose,
+     * non-guessable, returned once at creation). Owned orders (user_id NOT NULL)
+     * require either matching ownership (Bearer user JWT) or the same token as
+     * fallback. Returns 404 on failure to hide existence (no enumeration).
+     *
+     * @return never 200 with the order (+ items), 404 when not found or not authorized.
      */
     public function show(Request $request, array $params): never
     {
-        $order = $this->orders->getOrder((int) ($params['id'] ?? 0));
+        $orderId = (int) ($params['id'] ?? 0);
+        if ($orderId < 1) {
+            $this->error('Order not found.', 404);
+        }
+
+        $providedToken = $this->extractLookupToken($request);
+        $authenticatedUserId = $this->authenticatedCustomerId($request);
+
+        // Use authorized lookup to hide existence on failure.
+        $order = $this->orders->getOrderAuthorized($orderId, $authenticatedUserId, $providedToken);
 
         if ($order === null) {
             $this->error('Order not found.', 404);
         }
 
-        $this->json(['data' => $order->toArray()]);
+        // Strip lookup_token from guest responses unless the caller
+        // presented the token (they already have it). Keep it in the
+        // model for internal use but don't echo it unnecessarily.
+        $data = $order->toArray();
+        if ($providedToken === null || $providedToken === '') {
+            unset($data['lookup_token']);
+        }
+
+        $this->json(['data' => $data]);
+    }
+
+    /**
+     * Extracts the single-purpose lookup token from query `?token=` or
+     * header `X-Order-Token` (narrowly scoped, not Authorization).
+     */
+    private function extractLookupToken(Request $request): ?string
+    {
+        $token = $request->query('token');
+        if (is_string($token) && $token !== '') {
+            return trim($token);
+        }
+        $header = $request->header('X-Order-Token');
+        if (is_string($header) && $header !== '') {
+            return trim($header);
+        }
+        return null;
     }
 }

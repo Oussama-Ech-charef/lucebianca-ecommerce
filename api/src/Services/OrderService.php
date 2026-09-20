@@ -27,12 +27,14 @@ final class OrderService
     private OrderRepository $orders;
     private EmailService $email;
     private NotificationService $notifications;
+    private \App\Repositories\SettingsRepository $settings;
 
     public function __construct()
     {
         $this->orders = new OrderRepository();
         $this->email = new EmailService();
         $this->notifications = new NotificationService();
+        $this->settings = new \App\Repositories\SettingsRepository();
     }
 
     /**
@@ -175,6 +177,8 @@ final class OrderService
         // --- Payment method: validate against supported methods ---
         if (!in_array($paymentMethod, ['cod', 'whatsapp', 'card'], true)) {
             $errors['payment_method'] = 'Payment method must be "cod", "whatsapp", or "card".';
+        } elseif ($this->isPaymentMethodDisabled($paymentMethod)) {
+            $errors['payment_method'] = 'This payment method is currently disabled.';
         }
 
         // Check if card payment is configured when card method is selected
@@ -223,7 +227,10 @@ final class OrderService
         $totalAmount = number_format($totalCents / 100, 2, '.', '');
 
         // --- One transaction: order + items + guarded stock decrement. ---
+        // Generate single-purpose lookup token for guest privacy (non-guessable, returned once).
+        $lookupToken = \App\Repositories\OrderRepository::generateLookupToken();
         $pdo = Database::get();
+        $lowStockAlerts = [];
         $pdo->beginTransaction();
         try {
             $orderId = $this->orders->insertOrder([
@@ -234,6 +241,7 @@ final class OrderService
                 'customer_name'    => $customerName,
                 'phone'            => $phone,
                 'email'            => $email,
+                'lookup_token'     => $lookupToken,
                 'payment_method'   => $paymentMethod,
             ], $userId);
 
@@ -255,15 +263,15 @@ final class OrderService
                     );
                 }
 
-                // Check for low stock after decrement (threshold: 5 units)
+                // Collect low-stock alerts to send AFTER successful commit
                 $remainingStock = (int) $rows[$line['variant_id']]['stock_quantity'] - $line['quantity'];
                 if ($remainingStock > 0 && $remainingStock <= 5) {
-                    $this->notifications->notifyLowStock(
-                        $line['product_name'],
-                        (string) $rows[$line['variant_id']]['size'],
-                        (string) $rows[$line['variant_id']]['color'],
-                        $remainingStock
-                    );
+                    $lowStockAlerts[] = [
+                        'product_name' => $line['product_name'],
+                        'size' => (string) $rows[$line['variant_id']]['size'],
+                        'color' => (string) $rows[$line['variant_id']]['color'],
+                        'stock' => $remainingStock,
+                    ];
                 }
             }
 
@@ -276,6 +284,16 @@ final class OrderService
         }
 
         $order = $this->getOrder($orderId);
+
+        // Side effects only after successful commit (best-effort, never fail the order)
+        foreach ($lowStockAlerts as $alert) {
+            $this->notifications->notifyLowStock(
+                $alert['product_name'],
+                $alert['size'],
+                $alert['color'],
+                $alert['stock']
+            );
+        }
 
         // Send order confirmation email (best-effort, never fails the order)
         $this->sendOrderConfirmationEmail($order, $customerName);
@@ -294,6 +312,23 @@ final class OrderService
     public function getOrder(int $id): ?Order
     {
         $order = $this->orders->findById($id);
+        if ($order === null) {
+            return null;
+        }
+
+        $order->items = $this->orders->itemsForOrder($id);
+
+        return $order;
+    }
+
+    /**
+     * Authorized fetch for privacy-sensitive reads. Uses the repository's
+     * ownership/token check and then loads items only on success. Returns
+     * null on 404 to hide existence.
+     */
+    public function getOrderAuthorized(int $id, ?int $authenticatedUserId, ?string $providedToken): ?Order
+    {
+        $order = $this->orders->findAuthorized($id, $authenticatedUserId, $providedToken);
         if ($order === null) {
             return null;
         }
@@ -325,13 +360,12 @@ final class OrderService
 
         $order = $this->getOrder($id);
 
-        // Send shipping status email if order status changed
+        // Send shipping status email if order status changed (guest + registered)
         if ($order !== null && isset($fields['status'])) {
-            // Get customer name and email for notification
             $customerName = $order->customerName;
-            $email = null;
-
-            if ($order->userId !== null) {
+            // Prefer order.email (guest and registered both have it), fallback to user email for older rows
+            $email = $order->email ?? null;
+            if (($email === null || $email === '') && $order->userId !== null) {
                 $userRepo = new \App\Repositories\UserRepository();
                 $user = $userRepo->findById($order->userId);
                 if ($user !== null) {
@@ -339,7 +373,7 @@ final class OrderService
                 }
             }
 
-            if ($email !== null) {
+            if ($email !== null && $email !== '') {
                 $this->sendShippingStatusEmail($order, $customerName, $email);
             }
         }
@@ -426,6 +460,24 @@ final class OrderService
     }
 
     /**
+     * Whether a payment method is disabled via `settings` (admin toggle).
+     * Missing row defaults to enabled ("1") to keep fresh installs working.
+     */
+    private function isPaymentMethodDisabled(string $method): bool
+    {
+        $key = "payment_{$method}_enabled";
+        if (!in_array($key, ['payment_cod_enabled', 'payment_whatsapp_enabled', 'payment_card_enabled'], true)) {
+            return false;
+        }
+        try {
+            $value = $this->settings->get($key);
+        } catch (\Throwable) {
+            return false;
+        }
+        return $value === '0';
+    }
+
+    /**
      * Sends order confirmation email (best-effort, never fails the order).
      *
      * @param Order  $order        The order object with items.
@@ -433,6 +485,15 @@ final class OrderService
      */
     private function sendOrderConfirmationEmail(Order $order, string $customerName): void
     {
+        // Respect admin toggle (default enabled)
+        try {
+            if ($this->settings->get('notify_customer_order_confirmation') === '0') {
+                return;
+            }
+        } catch (\Throwable) {
+            // ignore settings read errors, proceed to send
+        }
+
         // Get email from order (now required for all orders)
         $email = $order->email ?? null;
 
@@ -471,6 +532,13 @@ final class OrderService
      */
     private function sendShippingStatusEmail(Order $order, string $customerName, string $email): void
     {
+        try {
+            if ($this->settings->get('notify_customer_shipping_update') === '0') {
+                return;
+            }
+        } catch (\Throwable) {
+            // ignore
+        }
         if ($email === '') {
             return;
         }
