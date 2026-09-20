@@ -11,11 +11,13 @@
  *     api/.env is never read and the developer database is never touched —
  *     DB credentials are copied from api/.env only as *connection defaults*,
  *     overridable via LB_TEST_DB_HOST / _PORT / _USER / _PASS / _NAME.
- *  2. Recreates the test schema from database/migrations/001…010 (the
- *     documented source of truth). Migration files hard-code
- *     `USE lucebianca;` — the runner rewrites that exact token to the test
- *     database name in memory before executing, so imports can never land
- *     in the development database.
+ *  2. Recreates the test schema from database/schema.sql snapshot (18 tables,
+ *     deterministic, includes lookup_token and drift repairs). The snapshot
+ *     hard-codes `USE lucebianca;` / `CREATE DATABASE` — the runner rewrites
+ *     that exact token to the test database name in memory before executing,
+ *     so imports can never land in the development database. Migrations
+ *     001→015 are NOT executed here (010 has duplicate-column conflict after
+ *     008, 014/015 are UNTESTED with INFORMATION_SCHEMA+PREPARE).
  *  3. Seeds one product + variant.
  *  4. Boots the REAL API (real bootstrap, real routes) on PHP's built-in
  *     server with external services disabled: RESEND_API_KEY and
@@ -127,43 +129,42 @@ $adminPdo->exec(
     "CREATE DATABASE `{$dbName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
 );
 
-$migrationFiles = glob($migrationsDir . '/*.sql') ?: [];
-sort($migrationFiles);
-if ($migrationFiles === []) {
-    fwrite(STDERR, "No migration files found in {$migrationsDir}\n");
+$schemaFile = $repoRoot . '/database/schema.sql';
+if (!is_file($schemaFile)) {
+    fwrite(STDERR, "Schema snapshot not found: {$schemaFile}\n");
     exit(1);
 }
-
-foreach ($migrationFiles as $file) {
-    $sql = (string) file_get_contents($file);
-    // Redirect the hard-coded USE/CREATE DATABASE statements to the test DB.
-    // Anything not matching these two exact directive forms fails loudly so
-    // a future migration can never silently touch the development database.
-    $transformed = preg_replace(
-        '/(CREATE DATABASE IF NOT EXISTS\s+|USE\s+)lucebianca\b/',
-        '${1}' . $dbName,
-        $sql
-    );
-    if (
-        $transformed === null
-        || preg_match('/^\s*USE\s+lucebianca\s*;/mi', $transformed) === 1
-        || preg_match('/CREATE DATABASE IF NOT EXISTS\s+lucebianca\b/', $transformed) === 1
-    ) {
-        fwrite(STDERR, "Unresolved production DB reference after transform in " . basename($file) . "\n");
-        exit(1);
-    }
-    // Execute the batch and drain every result set — required with
-    // MULTI_STATEMENTS, and it surfaces errors from ANY statement in the
-    // file (not just the first) thanks to ERRMODE_EXCEPTION.
-    $statement = $adminPdo->query($transformed);
-    do {
-        while ($statement->fetch() !== false) {
-            // discard rows (DDL emits none)
-        }
-    } while ($statement->nextRowset());
-    $statement->closeCursor();
+$sql = (string) file_get_contents($schemaFile);
+// Redirect the hard-coded USE/CREATE DATABASE statements to the test DB.
+// Anything not matching these two exact directive forms fails loudly so
+// a future migration can never silently touch the development database.
+// Snapshot is the deterministic source (18 tables, includes 015); migrations
+// 001→015 are not executed here because 010 has a duplicate-column conflict
+// after 008 and 014/015 are UNTESTED with INFORMATION_SCHEMA+PREPARE.
+$transformed = preg_replace(
+    '/(CREATE DATABASE IF NOT EXISTS\s+|USE\s+)lucebianca\b/',
+    '${1}' . $dbName,
+    $sql
+);
+if (
+    $transformed === null
+    || preg_match('/^\s*USE\s+lucebianca\s*;/mi', $transformed) === 1
+    || preg_match('/CREATE DATABASE IF NOT EXISTS\s+lucebianca\b/', $transformed) === 1
+) {
+    fwrite(STDERR, "Unresolved production DB reference after transform in database/schema.sql\n");
+    exit(1);
 }
-echo 'Schema ready (' . count($migrationFiles) . " migrations applied)\n";
+// Execute the batch and drain every result set — required with
+// MULTI_STATEMENTS, and it surfaces errors from ANY statement in the
+// file (not just the first) thanks to ERRMODE_EXCEPTION.
+$statement = $adminPdo->query($transformed);
+do {
+    while ($statement->fetch() !== false) {
+        // discard rows (DDL emits none)
+    }
+} while ($statement->nextRowset());
+$statement->closeCursor();
+echo "Schema ready (snapshot: database/schema.sql, 18 tables)\n";
 
 // --- 4. Seed minimal deterministic data ----------------------------------
 $pdo = new PDO(

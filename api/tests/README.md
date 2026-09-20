@@ -22,10 +22,14 @@ php api/tests/run-api-tests.php
 
 Boots the real API on PHP's built-in server (`127.0.0.1:8091`) against an
 isolated MySQL database `lucebianca_test`, rebuilt from
-`database/migrations/001…010` on every run. The developer database is never
-touched: migration files hard-code `USE lucebianca;`, which the runner
-rewrites in memory to the test database name (and hard-fails if a future
-migration introduces any other production-DB reference).
+`database/schema.sql` snapshot (18 tables, deterministic, includes `015`
+`lookup_token` and drift repairs) on every run. The developer database is never
+touched: the snapshot hard-codes `USE lucebianca;` / `CREATE DATABASE`, which
+the runner rewrites in memory to the test database name (and hard-fails if a
+future snapshot introduces any other production-DB reference). Migration files
+`001…015` are **not** executed by this harness (010 has a known duplicate-column
+conflict after 008, 014/015 are `UNTESTED` with `INFORMATION_SCHEMA+PREPARE`); see
+`database/migrations/README.md` two-path docs.
 
 Connection defaults are copied from `api/.env`; override with environment
 variables if needed: `LB_TEST_DB_HOST`, `LB_TEST_DB_PORT`,
