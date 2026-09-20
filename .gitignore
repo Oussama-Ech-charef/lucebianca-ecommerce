@@ -32,8 +32,6 @@ storage/logs/
 # --- Uploaded files (local, not Cloudinary) ---
 public/uploads/
 uploads/
-docs/
-lucebianca-project-full.md
 
 # --- Database dumps / backups ---
 *.sql.bak
@@ -54,3 +52,20 @@ coverage/
 # --- Cache ---
 .cache/
 .eslintcache
+
+# --- Local application runtime state ---
+api/storage/cache/
+api/storage/rate-limits/
+api/storage/logs/
+
+# --- Local agent/editor settings ---
+.claude/settings.local.json
+
+# --- Temporary files ---
+*.tmp
+*.temp
+*.cache
+*.bak
+
+
+lucebianca-project-full.md
