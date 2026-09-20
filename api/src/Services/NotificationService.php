@@ -17,10 +17,34 @@ use App\Core\Env;
 final class NotificationService
 {
     private EmailService $email;
+    private \App\Repositories\SettingsRepository $settings;
 
     public function __construct()
     {
         $this->email = new EmailService();
+        $this->settings = new \App\Repositories\SettingsRepository();
+    }
+
+    /**
+     * Whether a notification toggle is enabled. Missing row defaults to enabled.
+     */
+    private function isNotifyEnabled(string $key): bool
+    {
+        $allowed = [
+            'notify_admin_new_order',
+            'notify_admin_low_stock',
+            'notify_customer_order_confirmation',
+            'notify_customer_shipping_update',
+        ];
+        if (!in_array($key, $allowed, true)) {
+            return true;
+        }
+        try {
+            $value = $this->settings->get($key);
+        } catch (\Throwable) {
+            return true;
+        }
+        return $value !== '0';
     }
 
     /**
@@ -30,6 +54,9 @@ final class NotificationService
      */
     public function notifyNewOrder(array $orderData): void
     {
+        if (!$this->isNotifyEnabled('notify_admin_new_order')) {
+            return;
+        }
         $adminEmail = $this->getAdminEmail();
         if ($adminEmail === null) {
             return;
@@ -69,6 +96,9 @@ final class NotificationService
      */
     public function notifyLowStock(string $productName, string $size, string $color, int $stockLeft): void
     {
+        if (!$this->isNotifyEnabled('notify_admin_low_stock')) {
+            return;
+        }
         $adminEmail = $this->getAdminEmail();
         if ($adminEmail === null) {
             return;
