@@ -41,15 +41,25 @@ final class Auth
     }
 
     /**
-     * Verifies a token's signature and expiry.
+     * Verifies a token's signature and claims.
+     *
+     * Validates header `alg` (must be HS256), `sub` (>0), `role` (user/admin),
+     * `iat`/`exp` (exp must be future, iat not in future, exp > iat). Fails
+     * closed when JWT_SECRET is missing/weak (via getSecret()).
      *
      * @return array<string, mixed> Decoded payload claims on success.
      *
-     * @throws \RuntimeException When the token is expired or the signature is invalid.
+     * @throws \RuntimeException When the token is malformed, signature invalid, or claims invalid.
      */
     public static function verify(string $token): array
     {
         [$header, $payload, $signature] = self::split($token);
+
+        // Validate header before signature (alg must be HS256, typ JWT).
+        $headerData = self::decodePayload($header);
+        if (($headerData['alg'] ?? null) !== 'HS256' || ($headerData['typ'] ?? null) !== 'JWT') {
+            throw new \RuntimeException('Invalid token header.');
+        }
 
         $expected = self::signature($header, $payload);
 
@@ -60,7 +70,32 @@ final class Auth
 
         $claims = self::decodePayload($payload);
 
-        if (isset($claims['exp']) && (int) $claims['exp'] < time()) {
+        // Required claims: sub, role, iat, exp
+        if (!isset($claims['sub']) || !is_numeric($claims['sub']) || (int) $claims['sub'] < 1) {
+            throw new \RuntimeException('Invalid token subject.');
+        }
+        if (!isset($claims['role']) || !in_array($claims['role'], ['user', 'admin'], true)) {
+            throw new \RuntimeException('Invalid token role.');
+        }
+        if (!isset($claims['iat']) || !is_numeric($claims['iat'])) {
+            throw new \RuntimeException('Invalid token issued-at.');
+        }
+        if (!isset($claims['exp']) || !is_numeric($claims['exp'])) {
+            throw new \RuntimeException('Invalid token expiry.');
+        }
+
+        $iat = (int) $claims['iat'];
+        $exp = (int) $claims['exp'];
+        $now = time();
+
+        // iat must not be in the future (allow 60s clock skew), exp must be > iat and future.
+        if ($iat > $now + 60) {
+            throw new \RuntimeException('Token issued in the future.');
+        }
+        if ($exp <= $iat) {
+            throw new \RuntimeException('Token expiry must be after issued-at.');
+        }
+        if ($exp < $now) {
             throw new \RuntimeException('Token has expired.');
         }
 
@@ -79,9 +114,24 @@ final class Auth
         return "{$header}.{$payload}.{$sig}";
     }
 
+    private static function getSecret(): string
+    {
+        $secret = Env::get('JWT_SECRET');
+        if (!is_string($secret) || trim($secret) === '') {
+            throw new \RuntimeException('JWT_SECRET is not configured — failing closed.');
+        }
+        $trimmed = trim($secret);
+        // Reject default/placeholder and short secrets (would allow brute force or accidental deploy with dev value).
+        $weak = ['insecure-default-secret', 'change-me', 'secret', 'changeme'];
+        if (in_array(strtolower($trimmed), $weak, true) || mb_strlen($trimmed) < 32) {
+            throw new \RuntimeException('JWT_SECRET is missing or too weak — failing closed (need ≥32 random chars).');
+        }
+        return $trimmed;
+    }
+
     private static function signature(string $header, string $payload): string
     {
-        $secret = (string) Env::get('JWT_SECRET', 'insecure-default-secret');
+        $secret = self::getSecret();
         $data   = $header . '.' . $payload;
 
         return self::base64UrlEncode(hash_hmac('sha256', $data, $secret, true));
