@@ -5,12 +5,13 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
   clearAdminSession,
+  fetchAdminOrderDetail,
   fetchAdminOrders,
   getAdminSession,
   updateAdminOrder,
 } from "@/lib/admin";
 import { ApiError } from "@/lib/api";
-import { fetchOrder, formatPrice } from "@/lib/storefront";
+import { formatPrice } from "@/lib/storefront";
 import type {
   AdminOrder,
   OrderDetail,
@@ -118,9 +119,9 @@ type Meta = { page: number; per_page: number; total: number; pages: number };
  *
  * Desktop (lg+) renders a table; below lg it renders stacked cards so the
  * data never horizontally overflows a phone viewport (spec 3.5 mobile-first).
- * Row details use the existing public GET /api/orders/{id} (same join as the
- * customer confirmation page). Status changes PUT to the admin API and update
- * the row in place without a page reload.
+ * Row details use the protected admin GET /api/admin/orders/{id} (admin JWT,
+ * same join as the customer confirmation page, no lookup_token). Status changes
+ * PUT to the admin API and update the row in place without a page reload.
  */
 export default function OrdersClient() {
   const router = useRouter();
@@ -253,9 +254,18 @@ export default function OrdersClient() {
     setDetailLoading(true);
     setDetailError(null);
     try {
-      const response = await fetchOrder(order.id);
+      const token = getAdminSession()?.token;
+      if (!token) {
+        redirectToLogin();
+        return;
+      }
+      const response = await fetchAdminOrderDetail(order.id, token);
       setDetail(response.data);
     } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        redirectToLogin();
+        return;
+      }
       setDetailError(
         error instanceof Error ? error.message : "Failed to load order items.",
       );

@@ -14,6 +14,7 @@
  */
 
 import { api, fetchCsrfToken } from "@/lib/api";
+import { ADMIN_COOKIE_NAME, API_URL } from "./config";
 import type {
   AdminAuthPayload,
   AdminOrder,
@@ -24,8 +25,8 @@ import type {
 } from "@/lib/types";
 
 const SESSION_KEY = "lucebianca:admin:session:v1";
-const SESSION_COOKIE = "lb_admin_session";
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8090";
+const SESSION_COOKIE = ADMIN_COOKIE_NAME;
+const API_BASE = API_URL;
 
 export type AdminOrderFilters = {
   page?: number;
@@ -57,11 +58,13 @@ function readSession(): AdminAuthPayload | null {
 }
 
 function setSessionCookie(token: string): void {
-  document.cookie = `${SESSION_COOKIE}=${encodeURIComponent(token)}; path=/; SameSite=Lax`;
+  const secure = typeof window !== "undefined" && window.location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${SESSION_COOKIE}=${encodeURIComponent(token)}; path=/; SameSite=Lax${secure}`;
 }
 
 function clearSessionCookie(): void {
-  document.cookie = `${SESSION_COOKIE}=; path=/; SameSite=Lax; Max-Age=0`;
+  const secure = typeof window !== "undefined" && window.location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${SESSION_COOKIE}=; path=/; SameSite=Lax; Max-Age=0${secure}`;
 }
 
 /** POST /api/admin/auth/login — email/password admin login. */
@@ -105,6 +108,16 @@ export function fetchAdminOrders(filters: AdminOrderFilters, token: string) {
     params.set("status", filters.status);
   }
   return api<Paginated<AdminOrder>>(`/api/admin/orders?${params.toString()}`, {
+    token,
+  });
+}
+
+/**
+ * GET /api/admin/orders/{id} — admin order detail with items.
+ * Requires admin Bearer token; does not use guest lookup_token.
+ */
+export function fetchAdminOrderDetail(id: number, token: string) {
+  return api<{ data: OrderDetail }>(`/api/admin/orders/${id}`, {
     token,
   });
 }

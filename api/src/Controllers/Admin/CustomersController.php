@@ -113,8 +113,8 @@ final class CustomersController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'phone' => $user->phone,
-                'email_verified' => $user->email_verified,
-                'created_at' => $user->created_at,
+                'email_verified' => $user->emailVerified,
+                'created_at' => $user->createdAt,
                 'orders' => $orders,
             ],
         ]);

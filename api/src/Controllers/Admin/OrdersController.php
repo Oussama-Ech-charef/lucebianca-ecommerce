@@ -61,6 +61,28 @@ final class OrdersController extends Controller
     }
 
     /**
+     * GET /api/admin/orders/{id} — admin order detail with items.
+     *
+     * Protected by AuthMiddleware('admin') (see routes.php). Reuses
+     * OrderService::getOrder() (direct, admin is trusted) — no guest
+     * lookup_token gate, no ownership check. Returns 404 if missing
+     * (same safe message as public endpoint, per existing API conventions).
+     * lookup_token is not exposed (see Order::toArrayWithoutLookupToken).
+     *
+     * @return never 200 with {data: order+items}, 404 when missing.
+     */
+    public function show(Request $request, array $params): never
+    {
+        $id = (int) ($params['id'] ?? 0);
+        $order = $this->orderService->getOrder($id);
+        if ($order === null) {
+            $this->error('Order not found.', 404);
+        }
+
+        $this->json(['data' => $order->toArrayWithoutLookupToken()]);
+    }
+
+    /**
      * PUT /api/admin/orders/{id} — change order status (and optionally
      * payment_status).
      *
@@ -112,6 +134,6 @@ final class OrdersController extends Controller
 
         $updated = $this->orderService->updateStatus($id, $fields);
 
-        $this->json(['data' => $updated->toArray()]);
+        $this->json(['data' => $updated->toArrayWithoutLookupToken()]);
     }
 }

@@ -30,6 +30,7 @@ final class Order
         public string $paymentMethod,
         public string $paymentStatus,
         public string $createdAt,
+        public ?string $lookupToken = null,
         public array $items = []
     ) {
     }
@@ -52,7 +53,8 @@ final class Order
             $row['email'] ?? null,
             (string) $row['payment_method'],
             (string) $row['payment_status'],
-            (string) $row['created_at']
+            (string) $row['created_at'],
+            $row['lookup_token'] ?? null
         );
     }
 
@@ -61,7 +63,7 @@ final class Order
      */
     public function toArray(): array
     {
-        return [
+        $data = [
             'id'               => $this->id,
             'user_id'          => $this->userId,
             'status'           => $this->status,
@@ -77,5 +79,21 @@ final class Order
             'created_at'       => $this->createdAt,
             'items'            => $this->items,
         ];
+
+        // Expose lookup_token only to the creator (store response) or
+        // to an authorized holder. Controllers decide whether to strip it;
+        // model keeps it for internal checks.
+        if ($this->lookupToken !== null) {
+            $data['lookup_token'] = $this->lookupToken;
+        }
+
+        return $data;
+    }
+
+    public function toArrayWithoutLookupToken(): array
+    {
+        $data = $this->toArray();
+        unset($data['lookup_token']);
+        return $data;
     }
 }

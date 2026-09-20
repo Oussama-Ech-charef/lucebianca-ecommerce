@@ -27,13 +27,26 @@ final class OrderRepository extends Repository
      *
      * @return int Auto-increment id of the new record.
      */
+    /**
+     * Generates a non-guessable, single-purpose lookup token for guest
+     * order confirmation. Caller must return it to the client once (store
+     * response) and thereafter require it for any guest read.
+     */
+    public static function generateLookupToken(): string
+    {
+        return bin2hex(random_bytes(32)); // 64 hex chars, 256-bit
+    }
+
     public function insertOrder(array $data, ?int $userId = null): int
     {
+        // Prefer caller-supplied token (service generates once), else create.
+        $lookupToken = $data['lookup_token'] ?? self::generateLookupToken();
+
         $stmt = $this->db->prepare(
             'INSERT INTO orders
-               (user_id, status, total_amount, shipping_address, city, postal_code, customer_name, phone, email, payment_method, payment_status)
+               (user_id, status, total_amount, shipping_address, city, postal_code, customer_name, phone, email, lookup_token, payment_method, payment_status)
              VALUES
-               (:user_id, \'pending\', :total_amount, :shipping_address, :city, :postal_code, :customer_name, :phone, :email, :payment_method, :payment_status)'
+               (:user_id, \'pending\', :total_amount, :shipping_address, :city, :postal_code, :customer_name, :phone, :email, :lookup_token, :payment_method, :payment_status)'
         );
         $stmt->bindValue(':user_id', $userId, \PDO::PARAM_INT);
         $stmt->bindValue(':total_amount', $data['total_amount']);
@@ -43,11 +56,45 @@ final class OrderRepository extends Repository
         $stmt->bindValue(':customer_name', $data['customer_name']);
         $stmt->bindValue(':phone', $data['phone']);
         $stmt->bindValue(':email', $data['email']);
+        $stmt->bindValue(':lookup_token', $lookupToken);
         $stmt->bindValue(':payment_method', $data['payment_method']);
         $stmt->bindValue(':payment_status', $data['payment_method'] === 'card' ? 'pending' : 'paid');
         $stmt->execute();
 
         return (int) $this->db->lastInsertId();
+    }
+
+    /**
+     * Checks whether the supplied token matches the order's stored
+     * lookup_token (guest) or whether the authenticated user owns the
+     * order. Returns the Order on success, null on 404 (to hide
+     * existence on failure).
+     */
+    public function findAuthorized(int $orderId, ?int $authenticatedUserId, ?string $providedToken): ?Order
+    {
+        $order = $this->findById($orderId);
+        if ($order === null) {
+            return null;
+        }
+
+        // Owned by a registered user → require ownership.
+        if ($order->userId !== null) {
+            if ($authenticatedUserId !== null && $authenticatedUserId === $order->userId) {
+                return $order;
+            }
+            // Allow guest token as fallback if the owner still has the link
+            if ($providedToken !== null && $providedToken !== '' && $order->lookupToken !== null && hash_equals($order->lookupToken, $providedToken)) {
+                return $order;
+            }
+            return null;
+        }
+
+        // Guest order (user_id NULL) → require exact token.
+        if ($providedToken === null || $providedToken === '' || $order->lookupToken === null) {
+            return null;
+        }
+
+        return hash_equals($order->lookupToken, $providedToken) ? $order : null;
     }
 
     /**

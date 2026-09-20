@@ -49,10 +49,11 @@ use App\Controllers\WishlistController;
 $router = new Router();
 
 // --- Security middleware ---
-// Rate limiting: 5 attempts per 5 minutes for login/register, 3 per 10 minutes for contact
+// Rate limiting: 5 attempts per 5 minutes for login/register, 3 per 10 minutes for contact, 5 per 5 min for admin login
 $loginRateLimit = new RateLimitMiddleware('login', 5, 300);
 $registerRateLimit = new RateLimitMiddleware('register', 5, 300);
 $contactRateLimit = new RateLimitMiddleware('contact', 3, 600);
+$adminLoginRateLimit = new RateLimitMiddleware('admin_login', 5, 300);
 
 // CSRF protection for state-changing operations
 $csrfProtection = new CsrfMiddleware();
@@ -108,6 +109,9 @@ $customerMiddleware = [new AuthMiddleware('user')];
 $router->get('/api/account', [AccountController::class, 'me'], $customerMiddleware);
 $router->get('/api/account/orders', [AccountController::class, 'orders'], $customerMiddleware);
 
+// --- Public settings (safe subset for storefront - WhatsApp, payment toggles, store info) ---
+$router->get('/api/settings/public', [SettingsController::class, 'publicIndex']);
+
 // --- Contact form (rate-limited + CSRF protected) ---
 $router->post('/api/contact', [ContactController::class, 'store'], [$contactRateLimit, $csrfProtection]);
 
@@ -117,7 +121,7 @@ $adminMiddleware = [new AuthMiddleware('admin')];
 // Admin login is PUBLIC (no middleware) — the one exception above.
 // There is no public admin registration; admins are seeded offline via
 // api/scripts/create-admin.php.
-$router->post('/api/admin/auth/login', [AdminAuthController::class, 'login']);
+$router->post('/api/admin/auth/login', [AdminAuthController::class, 'login'], [$adminLoginRateLimit]);
 
 // Admin CRUD operations (JWT auth + CSRF protection on state-changing)
 $adminCsrf = array_merge($adminMiddleware, [$csrfProtection]);
@@ -131,8 +135,9 @@ $router->post('/api/admin/products/{id}/images', [ProductsController::class, 'up
 $router->post('/api/admin/products/{id}/variants', [ProductsController::class, 'storeVariant'], $adminCsrf);
 $router->put('/api/admin/variants/{id}', [ProductsController::class, 'updateVariant'], $adminCsrf);
 $router->delete('/api/admin/variants/{id}', [ProductsController::class, 'destroyVariant'], $adminCsrf);
-$router->get('/api/admin/orders', [OrdersController::class, 'index'], $adminMiddleware);
-$router->put('/api/admin/orders/{id}', [OrdersController::class, 'update'], $adminCsrf);
+    $router->get('/api/admin/orders', [OrdersController::class, 'index'], $adminMiddleware);
+    $router->get('/api/admin/orders/{id}', [OrdersController::class, 'show'], $adminMiddleware);
+    $router->put('/api/admin/orders/{id}', [OrdersController::class, 'update'], $adminCsrf);
 $router->get('/api/admin/dashboard-stats', [DashboardController::class, 'show'], $adminMiddleware);
 
 // Customers
