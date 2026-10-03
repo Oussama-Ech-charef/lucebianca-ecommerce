@@ -8,22 +8,25 @@ import { ApiError } from "@/lib/api";
 import { useCart } from "@/lib/cart-context";
 import { fetchCustomerAccount, getCustomerSession } from "@/lib/customer-auth";
 import {
+  fetchPaymentConfig,
   fetchPublicSettings,
   formatPrice,
+  initiateCardPayment,
   placeOrder,
   validateCart,
+  type PaymentConfig,
   type PublicSettings,
 } from "@/lib/storefront";
 import type { OrderDetail } from "@/lib/types";
 import type { CustomerUser } from "@/lib/types";
 import { buildWhatsAppLink } from "@/lib/whatsapp";
 
-type PaymentMethod = "cod" | "whatsapp";
+type PaymentMethod = "cod" | "whatsapp" | "card";
 
 const inputClass =
-  "mt-1 block w-full rounded-lg border border-neutral-300 px-3 py-3 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none";
+  "mt-1 block w-full rounded-lg border border-neutral-300 px-3 py-3 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1";
 const errorClass =
-  "mt-1 block w-full rounded-lg border border-red-400 px-3 py-3 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-red-500 focus:outline-none";
+  "mt-1 block w-full rounded-lg border border-red-400 px-3 py-3 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-red-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1 focus-visible:ring-2 focus-visible:ring-red-600 focus-visible:ring-offset-1";
 
 const FIELD_LABELS: Record<string, string> = {
   name: "Full name",
@@ -48,6 +51,7 @@ const FIELD_ORDER = ["name", "phone", "email", "address", "city", "postalCode"] 
 function paymentLabel(method: string): string {
   if (method === "cod") return "Cash on Delivery";
   if (method === "whatsapp") return "Order via WhatsApp";
+  if (method === "card") return "Card (CMI/Payzone)";
   return method;
 }
 
@@ -59,12 +63,16 @@ function buildWhatsAppMessage(order: OrderDetail): string {
     )
     .join("\n");
   const addressParts = [order.shipping_address, order.city, order.postal_code].filter(Boolean).join(", ");
+  const subtotal = (order as { subtotal_amount?: string }).subtotal_amount ?? order.total_amount;
+  const shipping = (order as { shipping_cost?: string }).shipping_cost ?? "0.00";
   return [
     `Hello Luce Bianca! I'd like to confirm my order.`,
     ``,
     `Order #${order.id}`,
     lines,
     ``,
+    `Subtotal: ${formatPrice(subtotal)}`,
+    `Shipping: ${Number(shipping) > 0 ? formatPrice(shipping) : "Free"}`,
     `Total: ${formatPrice(order.total_amount)}`,
     ``,
     `Name: ${order.customer_name}`,
@@ -73,6 +81,24 @@ function buildWhatsAppMessage(order: OrderDetail): string {
     ``,
     `Payment: ${paymentLabel(order.payment_method)}`,
   ].join("\n");
+}
+
+/**
+ * Client-side shipping estimate (preview only — the server recomputes
+ * authoritatively at order time from the same settings). Mirrors
+ * OrderService::calculateShippingCents: free when subtotal >= threshold.
+ */
+function estimateShippingCents(
+  subtotal: number,
+  settings: PublicSettings | null,
+): number {
+  const cost = Number(settings?.shipping_cost ?? 0);
+  const threshold = Number(settings?.free_shipping_threshold ?? 0);
+  if (!Number.isFinite(cost) || cost <= 0) return 0;
+  if (Number.isFinite(threshold) && threshold > 0 && subtotal >= threshold) {
+    return 0;
+  }
+  return Math.round(cost * 100) / 100;
 }
 
 export default function CheckoutForm() {
@@ -92,6 +118,7 @@ export default function CheckoutForm() {
   const [customer, setCustomer] = useState<CustomerUser | null>(null);
   const [loadingCustomer, setLoadingCustomer] = useState(true);
   const [publicSettings, setPublicSettings] = useState<PublicSettings | null>(null);
+  const [paymentConfig, setPaymentConfig] = useState<PaymentConfig | null>(null);
 
   const redirectingRef = useRef(false);
 
@@ -118,12 +145,17 @@ export default function CheckoutForm() {
     }
   }, []);
 
-  // Load public settings (payment toggles, WhatsApp number) — cached via storefront fetch
+  // Load public settings (payment toggles, WhatsApp number, shipping) — cached via storefront fetch
   useEffect(() => {
     fetchPublicSettings()
       .then((res) => setPublicSettings(res.data))
       .catch(() => {
         // keep defaults (all enabled, fallback WhatsApp)
+      });
+    fetchPaymentConfig()
+      .then((res) => setPaymentConfig(res.data))
+      .catch(() => {
+        // card stays hidden when the gateway status cannot be confirmed
       });
   }, []);
 
@@ -189,21 +221,33 @@ export default function CheckoutForm() {
 
   const isLoggedIn = customer !== null;
 
-  // Payment toggles from settings (defaults to enabled for fresh installs)
+  // Payment toggles from settings (defaults to enabled for fresh installs).
+  // Card is offered only when BOTH the admin toggle is on AND the CMI gateway
+  // is configured (GET /api/payments/config) — never a hard-coded "coming soon".
   const isCodEnabled = publicSettings?.payment_cod_enabled !== "0";
   const isWhatsappEnabled = publicSettings?.payment_whatsapp_enabled !== "0";
+  const isCardToggleOn = publicSettings?.payment_card_enabled !== "0";
+  const isCardAvailable =
+    isCardToggleOn && (paymentConfig?.card_available ?? false);
+  const estimatedShipping = estimateShippingCents(totalPrice, publicSettings);
+  const estimatedTotal = totalPrice + estimatedShipping;
 
   // If the currently selected method becomes disabled via settings, switch to an enabled one
+  // (derived selection — disable the cascading-render rule here; the update is
+  // conditional and idempotent, not a render loop).
   useEffect(() => {
     if (!publicSettings) return;
-    if (paymentMethod === "cod" && !isCodEnabled && isWhatsappEnabled) {
-      // eslint-disable-next-line
-      setPaymentMethod("whatsapp");
-    } else if (paymentMethod === "whatsapp" && !isWhatsappEnabled && isCodEnabled) {
-      // eslint-disable-next-line
-      setPaymentMethod("cod");
+    const fallback: PaymentMethod | null =
+      isCodEnabled ? "cod" : isWhatsappEnabled ? "whatsapp" : isCardAvailable ? "card" : null;
+    if (paymentMethod === "cod" && !isCodEnabled && fallback) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPaymentMethod(fallback);
+    } else if (paymentMethod === "whatsapp" && !isWhatsappEnabled && fallback) {
+      setPaymentMethod(fallback);
+    } else if (paymentMethod === "card" && !isCardAvailable && fallback) {
+      setPaymentMethod(fallback);
     }
-  }, [publicSettings, isCodEnabled, isWhatsappEnabled, paymentMethod]);
+  }, [publicSettings, paymentConfig, isCodEnabled, isWhatsappEnabled, isCardAvailable, paymentMethod]);
 
   function validate(): boolean {
     const next: Record<string, string> = {};
@@ -230,6 +274,9 @@ export default function CheckoutForm() {
     }
     if (paymentMethod === "whatsapp" && !isWhatsappEnabled) {
       next.payment_method = "Order via WhatsApp is currently disabled.";
+    }
+    if (paymentMethod === "card" && !isCardAvailable) {
+      next.payment_method = "Card payment is currently unavailable. Please choose another method.";
     }
     setErrors(next);
     const hasErrors = Object.keys(next).length > 0;
@@ -313,6 +360,43 @@ export default function CheckoutForm() {
         getCustomerSession()?.token,
       );
       const order = response.data;
+
+      // Card flow: order is pending → initiate CMI payment → auto-submit a
+      // real HTML form POST to the gateway (3-D Secure happens on CMI's
+      // hosted page). Polling/confirmation lives on /payment/[id].
+      if (paymentMethod === "card") {
+        try {
+          const initiation = await initiateCardPayment(
+            order.id,
+            order.lookup_token,
+            getCustomerSession()?.token,
+            email.trim(),
+          );
+          const form = document.createElement("form");
+          form.method = "POST";
+          form.action = initiation.data.gateway_url;
+          form.style.display = "none";
+          for (const [key, value] of Object.entries(initiation.data.form_fields)) {
+            const input = document.createElement("input");
+            input.type = "hidden";
+            input.name = key;
+            input.value = String(value);
+            form.appendChild(input);
+          }
+          document.body.appendChild(form);
+          form.submit();
+          return;
+        } catch {
+          // Order exists (stock reserved) but the gateway could not start —
+          // send the customer to the payment page to retry instead of losing
+          // the order. The token param preserves guest access.
+          const tokenParam = order.lookup_token
+            ? `?token=${encodeURIComponent(order.lookup_token)}`
+            : "";
+          router.push(`/payment/${order.id}${tokenParam}`);
+          return;
+        }
+      }
 
       // WhatsApp flow: the order is already created (payment_status stays
       // pending) — the chat opens so the store can confirm details + arrange
@@ -516,29 +600,63 @@ export default function CheckoutForm() {
                   </span>
                 </label>
               )}
-              {!isCodEnabled && !isWhatsappEnabled && (
+              {!isCodEnabled && !isWhatsappEnabled && !isCardAvailable && (
                 <p className="text-sm text-red-600">All payment methods are currently disabled. Please contact the store.</p>
               )}
 
-              <div
-                aria-disabled="true"
-                className="flex cursor-not-allowed items-start gap-3 rounded-lg border border-neutral-200 bg-neutral-50 p-4 opacity-60"
-              >
-                <input
-                  type="radio"
-                  disabled
-                  aria-label="Card payment — coming soon"
-                  className="mt-1"
-                />
-                <span>
-                  <span className="block text-sm font-medium text-neutral-500">
-                    Card (CMI/Payzone)
+              {isCardAvailable ? (
+                <label
+                  className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 transition-colors ${
+                    paymentMethod === "card"
+                      ? "border-neutral-900 bg-neutral-50"
+                      : "border-neutral-200 hover:border-neutral-400"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="payment"
+                    value="card"
+                    checked={paymentMethod === "card"}
+                    onChange={() => setPaymentMethod("card")}
+                    className="mt-1 accent-neutral-900"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-neutral-900">
+                      Card (CMI/Payzone)
+                    </span>
+                    <span className="mt-0.5 block text-xs text-neutral-500">
+                      Pay securely by card — you will be redirected to CMI to complete 3-D Secure.
+                    </span>
                   </span>
-                  <span className="mt-0.5 block text-xs text-neutral-400">
-                    Card payments arrive in a later phase — coming soon.
+                </label>
+              ) : (
+                <div
+                  aria-disabled="true"
+                  title={
+                    !isCardToggleOn
+                      ? "Card payment is disabled by the store"
+                      : "Card payment is not configured yet"
+                  }
+                  className="flex cursor-not-allowed items-start gap-3 rounded-lg border border-neutral-200 bg-neutral-50 p-4 opacity-60"
+                >
+                  <input
+                    type="radio"
+                    disabled
+                    aria-label="Card payment — currently unavailable"
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-neutral-500">
+                      Card (CMI/Payzone)
+                    </span>
+                    <span className="mt-0.5 block text-xs text-neutral-400">
+                      {!isCardToggleOn
+                        ? "Card payment is currently disabled."
+                        : "Card payment is not configured yet — contact the store."}
+                    </span>
                   </span>
-                </span>
-              </div>
+                </div>
+              )}
             </div>
           </section>
 
@@ -595,7 +713,8 @@ export default function CheckoutForm() {
           <button
             type="submit"
             disabled={submitting || loadingCustomer}
-            className="w-full rounded-lg bg-neutral-900 px-6 py-4 text-sm font-medium text-white transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-300"
+            aria-busy={submitting}
+            className="w-full rounded-lg bg-neutral-900 px-6 py-4 text-sm font-medium text-white transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-2"
           >
             {loadingCustomer
               ? "Loading your details…"
@@ -603,7 +722,9 @@ export default function CheckoutForm() {
                 ? "Placing order…"
                 : paymentMethod === "whatsapp"
                   ? "Send order via WhatsApp"
-                  : "Place order — pay on delivery"}
+                  : paymentMethod === "card"
+                    ? `Pay ${formatPrice(estimatedTotal)} by card`
+                    : "Place order — pay on delivery"}
           </button>
           <p className="text-center text-xs text-neutral-400">
             By placing this order you agree to be contacted by the store to
@@ -628,12 +749,34 @@ export default function CheckoutForm() {
               </li>
             ))}
           </ul>
-          <div className="mt-5 flex items-center justify-between border-t border-neutral-200 pt-4">
-            <span className="text-sm text-neutral-600">Total</span>
-            <span className="font-serif text-lg tabular-nums">
-              {formatPrice(totalPrice)}
-            </span>
-          </div>
+          <dl className="mt-5 space-y-2 border-t border-neutral-200 pt-4 text-sm">
+            <div className="flex items-center justify-between">
+              <dt className="text-neutral-600">Subtotal</dt>
+              <dd className="tabular-nums">{formatPrice(totalPrice)}</dd>
+            </div>
+            <div className="flex items-center justify-between">
+              <dt className="text-neutral-600">Shipping</dt>
+              <dd className="tabular-nums">
+                {estimatedShipping > 0 ? formatPrice(estimatedShipping) : "Free"}
+              </dd>
+            </div>
+            {publicSettings?.free_shipping_threshold &&
+            Number(publicSettings.free_shipping_threshold) > 0 ? (
+              <p className="text-xs text-neutral-500">
+                Free shipping on orders over{" "}
+                {formatPrice(Number(publicSettings.free_shipping_threshold))}.
+              </p>
+            ) : null}
+            <div className="flex items-center justify-between border-t border-neutral-200 pt-3">
+              <dt className="font-medium text-neutral-900">Total</dt>
+              <dd className="font-serif text-lg tabular-nums">
+                {formatPrice(estimatedTotal)}
+              </dd>
+            </div>
+          </dl>
+          <p className="mt-2 text-xs text-neutral-400">
+            Final shipping is confirmed server-side at order time.
+          </p>
         </aside>
       </div>
     </main>

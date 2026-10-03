@@ -99,6 +99,8 @@ export type AdminOrder = {
   customer_name: string;
   phone: string;
   total_amount: string;
+  subtotal_amount?: string;
+  shipping_cost?: string;
   status: OrderStatus;
   payment_method: string;
   payment_status: PaymentStatus;
@@ -109,7 +111,7 @@ export type AdminOrder = {
 /** Payload of POST /api/admin/auth/login. */
 export type AdminAuthPayload = {
   token: string;
-  refresh_token: string;
+  refresh_token?: string;
   admin: {
     id: number;
     name: string;
@@ -135,12 +137,13 @@ export type CustomerUser = {
 
 /**
  * Payload of POST /api/auth/register, POST /api/auth/login and
- * POST /api/auth/google. Persisted under `lucebianca:customer:session:v1` —
- * a deliberately separate store from the admin session and the cart.
+ * POST /api/auth/google. Only token+user are persisted client-side
+ * (refresh_token lives in its HttpOnly cookie); the field stays optional
+ * to read legacy localStorage sessions created before the cookie flow.
  */
 export type CustomerAuthPayload = {
   token: string;
-  refresh_token: string;
+  refresh_token?: string;
   user: CustomerUser;
 };
 
@@ -211,6 +214,8 @@ export type OrderDetail = {
   user_id: number | null;
   status: OrderStatus;
   total_amount: string;
+  subtotal_amount: string;
+  shipping_cost: string;
   shipping_address: string;
   city: string;
   postal_code: string;
@@ -221,6 +226,7 @@ export type OrderDetail = {
   payment_status: PaymentStatus;
   created_at: string;
   lookup_token?: string;
+  inventory_released_at?: string;
   items: OrderLineItem[];
 };
 

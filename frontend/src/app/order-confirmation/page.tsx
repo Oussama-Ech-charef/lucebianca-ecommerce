@@ -34,8 +34,19 @@ function PaymentStatus({ method, status }: { method: string; status: string }) {
       ? "Cash on Delivery"
       : method === "whatsapp"
         ? "Order via WhatsApp"
-        : method;
-  const statusLabel = status === "pending" ? "Pending confirmation" : status;
+        : method === "card"
+          ? "Card (CMI/Payzone)"
+          : method;
+  // Business rule: every method starts pending; paid only after card callback
+  // success or explicit admin confirmation (COD/WhatsApp included).
+  const statusLabel =
+    status === "pending"
+      ? "Pending confirmation"
+      : status === "paid"
+        ? "Paid"
+        : status === "failed"
+          ? "Failed"
+          : status;
   return (
     <p className="mt-1 text-sm text-neutral-500">
       {methodLabel} · {statusLabel}
@@ -66,11 +77,12 @@ export async function generateMetadata({ searchParams }: PageProps): Promise<Met
   const value = Array.isArray(id) ? id[0] : id;
   const tokenValue = Array.isArray(token) ? token[0] : token;
   if (!value) {
-    return { title: "Order not found" };
+    return { title: "Order not found", robots: { index: false, follow: false } };
   }
   const order = await getOrder(value, tokenValue);
   return {
     title: order ? `Order #${order.id} — confirmed` : "Order not found",
+    robots: { index: false, follow: false },
   };
 }
 
@@ -136,11 +148,34 @@ export default async function ConfirmationPage({ searchParams }: PageProps) {
             </li>
           ))}
         </ul>
-        <div className="mt-4 flex items-center justify-between">
-          <span className="text-sm text-neutral-600">Total</span>
-          <span className="font-serif text-xl tabular-nums">
-            {formatPrice(order.total_amount)}
-          </span>
+        <div className="mt-4 space-y-2 border-t border-neutral-200 pt-4 text-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-neutral-600">Subtotal</span>
+            <span className="tabular-nums">
+              {formatPrice(
+                (order as { subtotal_amount?: string }).subtotal_amount ??
+                  order.total_amount,
+              )}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-neutral-600">Shipping</span>
+            <span className="tabular-nums">
+              {Number(
+                (order as { shipping_cost?: string }).shipping_cost ?? "0",
+              ) > 0
+                ? formatPrice(
+                    (order as { shipping_cost?: string }).shipping_cost ?? "0",
+                  )
+                : "Free"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between border-t border-neutral-200 pt-3">
+            <span className="font-medium text-neutral-900">Total</span>
+            <span className="font-serif text-xl tabular-nums">
+              {formatPrice(order.total_amount)}
+            </span>
+          </div>
         </div>
       </section>
 
@@ -150,12 +185,31 @@ export default async function ConfirmationPage({ searchParams }: PageProps) {
         <p className="mt-1 text-sm text-neutral-700">{order.phone}</p>
         <p className="mt-1 whitespace-pre-line text-sm text-neutral-700">
           {order.shipping_address}
+          {[order.city, order.postal_code].filter(Boolean).length > 0
+            ? `\n${[order.city, order.postal_code].filter(Boolean).join(", ")}`
+            : null}
         </p>
         <p className="mt-4 text-xs text-neutral-500">
           {order.payment_method === "whatsapp"
             ? "We've opened a WhatsApp chat with your order details — the store will confirm payment and delivery there."
-            : "The store will contact you on this phone number to confirm delivery."}
+            : order.payment_method === "card"
+              ? order.payment_status === "paid"
+                ? "Your card payment was confirmed. We'll email you when your order ships."
+                : "Complete your card payment from the payment page — your items stay reserved for 30 minutes."
+              : "The store will contact you on this phone number to confirm delivery. Payment is collected on delivery or confirmation."}
         </p>
+        {order.payment_method === "card" && order.payment_status !== "paid" ? (
+          <Link
+            href={
+              tokenValue
+                ? `/payment/${order.id}?token=${encodeURIComponent(tokenValue)}`
+                : `/payment/${order.id}`
+            }
+            className="mt-4 inline-block rounded-lg bg-neutral-900 px-6 py-3 text-sm font-medium text-white hover:bg-neutral-700"
+          >
+            Complete card payment
+          </Link>
+        ) : null}
       </section>
 
       {/* Guests only — hidden once a customer session exists; dismissing

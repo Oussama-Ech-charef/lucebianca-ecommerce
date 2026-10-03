@@ -123,13 +123,17 @@ export async function validateCart(
 }
 
 /**
- * POST /api/orders — places an order (COD or WhatsApp payment method).
+ * POST /api/orders — places an order (COD, WhatsApp or card payment method).
  * Returns 201 with the created order; throws ApiError(409) on a stock
  * conflict and ApiError(422) on invalid input.
  *
  * A customer token is optional: when present (logged-in checkout) the API
  * attributes the order to the customer (orders.user_id) so it appears on
  * /account; a guest checkout sends no token and stays anonymous.
+ *
+ * payment_status is ALWAYS pending at creation (COD/WhatsApp included —
+ * paid only via card callback success or admin confirmation). total_amount
+ * is authoritative server-side (subtotal + shipping from settings).
  */
 export async function placeOrder(
   payload: {
@@ -139,7 +143,7 @@ export async function placeOrder(
     shipping_address: string;
     city: string;
     postal_code: string;
-    payment_method: "cod" | "whatsapp";
+    payment_method: "cod" | "whatsapp" | "card";
     items: { variant_id: number; quantity: number }[];
   },
   token?: string,
@@ -151,6 +155,92 @@ export async function placeOrder(
     body: payload,
     token,
   });
+}
+
+/**
+ * POST /api/orders/{id}/cancel — cancels a pending/processing order and
+ * restores stock. Requires ownership or lookup token (same as fetchOrder).
+ */
+export async function cancelOrder(
+  id: number | string,
+  lookupToken?: string,
+  authToken?: string,
+) {
+  const csrfToken = await fetchCsrfToken();
+  return api<{ data: OrderDetail }>(
+    `/api/orders/${encodeURIComponent(String(id))}/cancel`,
+    {
+      method: "POST",
+      headers: { "X-CSRF-Token": csrfToken },
+      body: lookupToken ? { lookup_token: lookupToken } : {},
+      ...(authToken ? { token: authToken } : {}),
+    },
+  );
+}
+
+export type PaymentConfig = {
+  card_enabled: boolean;
+  card_configured: boolean;
+  card_available: boolean;
+};
+
+/** GET /api/payments/config — whether card payment can be offered (no secrets). */
+export function fetchPaymentConfig() {
+  return api<{ data: PaymentConfig }>("/api/payments/config", {
+    cache: "no-store",
+  });
+}
+
+export type PaymentInitiation = {
+  gateway_url: string;
+  form_fields: Record<string, string>;
+};
+
+/**
+ * POST /api/payments/initiate — returns the CMI gateway URL + signed form
+ * fields. The caller must auto-submit them as a real HTML form POST (never
+ * fetch/XHR — the customer completes 3-D Secure on CMI's hosted page).
+ */
+export async function initiateCardPayment(
+  orderId: number,
+  lookupToken?: string,
+  authToken?: string,
+  email?: string,
+) {
+  const csrfToken = await fetchCsrfToken();
+  return api<{ data: PaymentInitiation }>("/api/payments/initiate", {
+    method: "POST",
+    headers: { "X-CSRF-Token": csrfToken },
+    body: {
+      order_id: orderId,
+      ...(lookupToken ? { lookup_token: lookupToken } : {}),
+      ...(email ? { email } : {}),
+    },
+    ...(authToken ? { token: authToken } : {}),
+  });
+}
+
+export type PaymentStatusResponse = {
+  order_id: number;
+  payment_status: "pending" | "paid" | "failed";
+  payment_method: string;
+  total_amount: string;
+  subtotal_amount: string;
+  shipping_cost: string;
+  status: string;
+};
+
+/** GET /api/payments/status/{orderId} — poll after CMI redirect/callback. */
+export function fetchPaymentStatus(
+  orderId: number | string,
+  lookupToken?: string,
+  authToken?: string,
+) {
+  const qs = lookupToken ? `?token=${encodeURIComponent(lookupToken)}` : "";
+  return api<{ data: PaymentStatusResponse }>(
+    `/api/payments/status/${encodeURIComponent(String(orderId))}${qs}`,
+    { ...(authToken ? { token: authToken } : {}), cache: "no-store" },
+  );
 }
 
 /**
@@ -208,7 +298,12 @@ export function fetchPublicSettings() {
  */
 export async function subscribeToNewsletter(
   email: string,
-): Promise<{ data: { subscribed: boolean; message: string } }> {
+): Promise<{
+  data: {
+    subscribed: boolean;
+    message: string;
+  };
+}> {
   const csrfToken = await fetchCsrfToken();
   return api("/api/newsletter/subscribe", {
     method: "POST",

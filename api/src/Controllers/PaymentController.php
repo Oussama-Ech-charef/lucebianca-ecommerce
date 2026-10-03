@@ -22,13 +22,24 @@ use App\Services\PaymentService;
  */
 final class PaymentController extends Controller
 {
-    private PaymentService $payments;
+    private ?PaymentService $payments = null;
     private OrderService $orders;
 
     public function __construct()
     {
-        $this->payments = new PaymentService();
         $this->orders = new OrderService();
+    }
+
+    /**
+     * Lazily creates the gateway client (throws 503 when unconfigured).
+     * The config/status endpoints must work without CMI credentials.
+     */
+    private function gateway(): PaymentService
+    {
+        if ($this->payments === null) {
+            $this->payments = new PaymentService();
+        }
+        return $this->payments;
     }
 
     /**
@@ -37,9 +48,13 @@ final class PaymentController extends Controller
      * Body: {"order_id": 123, "email": "customer@example.com"}
      *
      * Returns gateway URL and form fields to POST (frontend auto-submits form).
+     * The customer return URLs (okUrl/failUrl) point at the storefront
+     * payment page (/payment/{id}?token=...&pay=...); only callbackUrl (the
+     * server-to-server endpoint) points at the API.
      *
      * @return never 200 with payment initiation data, 404 if order not found,
-     *               422 on validation errors, 400 if order already paid
+     *               422 on validation errors, 400 if order already paid,
+     *               409 if the order cannot be (re)tried
      */
     public function initiate(Request $request): never
     {
@@ -69,12 +84,28 @@ final class PaymentController extends Controller
             $this->error('This order does not use card payment.', 400);
         }
 
+        if ($order->status === 'cancelled') {
+            $this->error('This order was cancelled. Please place a new order.', 409);
+        }
+
+        // Retry after a failure released the reservation: re-reserve stock
+        // atomically when every line is still available, else a clear 409.
+        if ($order->paymentStatus === 'failed') {
+            try {
+                $this->orders->reacquireInventoryForRetry($orderIdInt);
+            } catch (\App\Core\ConflictException $e) {
+                $this->error($e->getMessage(), 409);
+            }
+        }
+
         try {
-            $paymentData = $this->payments->initiatePayment(
+            $paymentData = $this->gateway()->initiatePayment(
                 (int) $orderId,
                 $order->totalAmount,
                 '504', // MAD currency code
-                $email
+                $email,
+                $order->lookupToken,
+                null // return-URL base comes from CMI_RETURN_URL (see PaymentService)
             );
         } catch (\RuntimeException $e) {
             $this->error('Payment gateway is not configured. Please contact support.', 503);
@@ -88,21 +119,44 @@ final class PaymentController extends Controller
     /**
      * POST /api/payments/callback — receives payment status from CMI gateway.
      *
-     * This endpoint is called by CMI after payment completion (success or failure).
-     * Verifies the signature and updates the order's payment_status accordingly.
+     * This endpoint is called server-to-server by CMI after payment
+     * completion (success or failure). It is NEVER the customer-facing
+     * return page: customers return to the storefront payment page via
+     * okUrl/failUrl (see PaymentService). Verifies the signature and updates
+     * the order's payment_status accordingly.
+     *
+     * Idempotent: replays of the same result return success without
+     * double-updating or double-restoring stock (the inventory release is
+     * claimed atomically — see OrderService). A late success for an already
+     * failed/cancelled/released order is rejected (409), never resurrected
+     * to paid.
      *
      * @return never 200 with status message (CMI expects a response)
      */
     public function callback(Request $request): never
     {
-        // Get all POST data from CMI callback
-        $callbackData = $_POST;
+        // CMI posts form-encoded (application/x-www-form-urlencoded), not
+        // JSON — Request::fromGlobals() keeps $_POST in query(), JSON in
+        // body(). Merge both so verification sees every field.
+        $callbackData = array_merge($request->all(), $_POST);
+        // $_GET status hint (?status=success/failure) is informational only —
+        // the authoritative result is ProcReturnCode/Response after HMAC check.
+        foreach ($_GET as $k => $v) {
+            if (!array_key_exists($k, $callbackData)) {
+                $callbackData[$k] = $v;
+            }
+        }
 
         if (empty($callbackData)) {
             $this->error('No callback data received.', 400);
         }
 
-        $result = $this->payments->verifyCallback($callbackData);
+        try {
+            $gateway = new PaymentService();
+        } catch (\RuntimeException) {
+            $this->error('Payment gateway is not configured.', 503);
+        }
+        $result = $gateway->verifyCallback($callbackData);
 
         if (!$result['valid']) {
             $this->error($result['message'] ?? 'Invalid payment callback.', 400);
@@ -123,35 +177,46 @@ final class PaymentController extends Controller
             $this->error('Order does not use card payment.', 400);
         }
 
-        // Amount equality: callback amount must match order total (prevent tampering, format to 2 decimals)
-        $callbackAmount = isset($result['amount']) ? (string) $result['amount'] : null;
-        if ($callbackAmount !== null && $callbackAmount !== '') {
-            $expected = number_format((float) $existing->totalAmount, 2, '.', '');
-            $received = number_format((float) $callbackAmount, 2, '.', '');
-            if ($expected !== $received) {
-                $this->error('Payment amount mismatch.', 400);
+        // Amount is required and must match the order total (prevent tampering).
+        $callbackAmount = isset($result['amount']) ? (string) $result['amount'] : '';
+        if ($callbackAmount === '') {
+            $this->error('Payment amount missing.', 400);
+        }
+        $expected = number_format((float) $existing->totalAmount, 2, '.', '');
+        $received = number_format((float) $callbackAmount, 2, '.', '');
+        if ($expected !== $received) {
+            $this->error('Payment amount mismatch.', 400);
+        }
+
+        // State transitions run inside atomic service methods (locked row +
+        // conditional inventory-release claim in one transaction):
+        //  - paid: allowed only from pending on an unreleased, uncancelled
+        //    order; replays return the paid order (200); late successes
+        //    after failure/cancellation/expiry are 409, never paid.
+        //  - failed: allowed from pending (even on a concurrently cancelled
+        //    order — the payment truth is recorded while the stock claim
+        //    stays idempotent); replays return the failed order (200).
+        $target = $result['status']; // 'paid' or 'failed'
+        try {
+            $order = $target === 'paid'
+                ? $this->orders->markCardPaymentPaid($result['order_id'])
+                : $this->orders->markCardPaymentFailed($result['order_id']);
+        } catch (\App\Core\ConflictException $e) {
+            // Genuine replays never throw (the service returns the already
+            // terminal order unchanged) — anything thrown here is a real
+            // conflict (late paid after release/cancel, paid→failed, ...).
+            // Re-read once: if the stored state already equals the callback
+            // target, treat the duplicate delivery as acknowledged.
+            $fresh = $this->orders->getOrder($result['order_id']);
+            if ($fresh !== null && $fresh->paymentStatus === $target) {
+                $order = $fresh;
+            } else {
+                $this->error($e->getMessage(), 409);
             }
         }
 
-        // Valid state transitions: only pending → paid/failed.
-        // Idempotency: if already in target state, treat as success without re-update (replay protection).
-        $current = $existing->paymentStatus;
-        $target = $result['status']; // 'paid' or 'failed'
-        if ($current === $target) {
-            // Idempotent replay — already in this state, return without state change.
-            $order = $existing;
-        } elseif ($current !== 'pending') {
-            $this->error('Invalid payment state transition.', 409);
-        } else {
-            // Update order payment status
-            $order = $this->orders->updateStatus(
-                $result['order_id'],
-                ['payment_status' => $target]
-            );
-
-            if ($order === null) {
-                $this->error('Order not found.', 404);
-            }
+        if ($order === null) {
+            $this->error('Order not found.', 404);
         }
 
         // Log successful payment for admin records
@@ -201,8 +266,37 @@ final class PaymentController extends Controller
                 'payment_status' => $order->paymentStatus,
                 'payment_method' => $order->paymentMethod,
                 'total_amount' => $order->totalAmount,
+                'subtotal_amount' => $order->subtotalAmount,
+                'shipping_cost' => $order->shippingCost,
+                'status' => $order->status,
             ],
         ]);
+    }
+
+    /**
+     * GET /api/payments/config — public card-availability flag (no secrets).
+     *
+     * Returns whether card payment is enabled in settings AND the CMI gateway
+     * is configured. The checkout uses this to decide whether to offer the
+     * card option instead of a hard-coded "coming soon" placeholder.
+     *
+     * @return never 200 with {card_enabled, card_configured, card_available}
+     */
+    public function config(Request $request): never
+    {
+        $settings = new \App\Repositories\SettingsRepository();
+        try {
+            $enabled = $settings->get('payment_card_enabled');
+        } catch (\Throwable) {
+            $enabled = null;
+        }
+        $cardEnabled = $enabled !== '0';
+        $cardConfigured = \App\Services\PaymentService::isConfigured();
+        $this->json(['data' => [
+            'card_enabled' => $cardEnabled,
+            'card_configured' => $cardConfigured,
+            'card_available' => $cardEnabled && $cardConfigured,
+        ]]);
     }
 
     private function extractLookupToken(Request $request): ?string
