@@ -25,10 +25,13 @@ CREATE TABLE users (
   phone                        VARCHAR(20)   NULL,
   email_verification_token     VARCHAR(255)  NULL,                -- 005: single-use opaque token, unique
   email_verification_expires_at DATETIME     NULL,                -- 005: 24 h expiry
+  password_reset_hash          CHAR(64)      NULL,                -- 017: SHA-256 of one-time reset token, single-use
+  password_reset_expires_at    DATETIME      NULL,                -- 017: 1 h expiry
   created_at                   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_users_email (email),
   UNIQUE KEY uq_users_google_id (google_id),
-  UNIQUE KEY uq_users_email_verification_token (email_verification_token)
+  UNIQUE KEY uq_users_email_verification_token (email_verification_token),
+  KEY idx_users_password_reset_hash (password_reset_hash)
 ) ENGINE=InnoDB;
 
 -- ------------------------------------------------------------
@@ -123,7 +126,9 @@ CREATE TABLE orders (
   user_id          INT UNSIGNED  NULL,       -- NULL = guest order, no account
   status           ENUM('pending','processing','shipped','delivered','cancelled')
                      NOT NULL DEFAULT 'pending',
-  total_amount     DECIMAL(10,2) NOT NULL,
+  total_amount     DECIMAL(10,2) NOT NULL,   -- 016: subtotal + shipping (authoritative, server-computed)
+  subtotal_amount  DECIMAL(10,2) NOT NULL DEFAULT 0.00, -- 016: lines total before shipping
+  shipping_cost    DECIMAL(10,2) NOT NULL DEFAULT 0.00, -- 016: authoritative shipping charged
   shipping_address VARCHAR(255)  NOT NULL,
   city             VARCHAR(100)  NOT NULL DEFAULT '', -- 013: separate city, default '' for existing rows
   postal_code      VARCHAR(20)   NOT NULL DEFAULT '', -- 013: postal code, default '' for existing rows
@@ -132,7 +137,8 @@ CREATE TABLE orders (
   email            VARCHAR(255)  NULL,                -- 009 truth: VARCHAR(255) NULL (approval: keep, no narrowing)
   lookup_token     VARCHAR(64)   NOT NULL,            -- 015: non-guessable single-purpose token for guest lookup (hex, 64 chars)
   payment_method   ENUM('card','cod','whatsapp') NOT NULL,  -- the agreed-on options
-  payment_status   ENUM('pending','paid','failed') NOT NULL DEFAULT 'pending',
+  payment_status   ENUM('pending','paid','failed') NOT NULL DEFAULT 'pending', -- pending until card callback success or admin confirms (COD/WhatsApp are NOT auto-paid)
+  inventory_released_at DATETIME NULL, -- 020: set once when reserved stock is restored (failed/cancelled/expired); guards idempotent release
   created_at       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_orders_user (user_id),
   KEY idx_orders_status (status),           -- index: fast filtering in the admin panel
@@ -234,6 +240,7 @@ CREATE TABLE newsletter_subscribers (
   is_active     TINYINT(1)   NOT NULL DEFAULT 1,  -- 0 after unsubscribe; resubscribe flips back to 1
   subscribed_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   unsubscribed_at DATETIME   NULL,
+  unsubscribe_count INT UNSIGNED NOT NULL DEFAULT 0, -- 018: audit counter for signed unsubscribes
   UNIQUE KEY uq_newsletter_email (email)
 ) ENGINE=InnoDB;
 
@@ -300,4 +307,15 @@ CREATE TABLE admin_refresh_tokens (
   KEY idx_admin_refresh_tokens_admin (admin_id),
   CONSTRAINT fk_admin_refresh_tokens_admin FOREIGN KEY (admin_id)
     REFERENCES admins(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ------------------------------------------------------------
+-- 19) schema_migrations: append-only record of applied migrations (019)
+-- ------------------------------------------------------------
+CREATE TABLE schema_migrations (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  filename VARCHAR(255) NOT NULL,
+  checksum CHAR(64) NOT NULL,
+  applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_schema_migrations_filename (filename)
 ) ENGINE=InnoDB;

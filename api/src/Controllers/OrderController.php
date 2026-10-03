@@ -138,6 +138,48 @@ final class OrderController extends Controller
     }
 
     /**
+     * POST /api/orders/{id}/cancel — customer/guest cancellation with stock restore.
+     *
+     * Authorized the same way as show() (ownership or lookup token, 404 to
+     * hide existence). Allowed only from pending/processing on UNPAID orders;
+     * shipped/delivered/cancelled → 409, paid → 409 (refund first — see
+     * OrderService::cancelOrder). Restores reserved stock exactly once
+     * (inventory policy). Cancellation is terminal (status=cancelled).
+     *
+     * @return never 200 with the cancelled order, 404 when not found/unauthorized, 409 when not cancellable.
+     */
+    public function cancel(Request $request, array $params): never
+    {
+        $orderId = (int) ($params['id'] ?? 0);
+        if ($orderId < 1) {
+            $this->error('Order not found.', 404);
+        }
+        $providedToken = $this->extractLookupToken($request);
+        // Body lookup_token for POST cancel.
+        if ($providedToken === null) {
+            $bodyToken = $request->input('lookup_token');
+            if (is_string($bodyToken) && $bodyToken !== '') {
+                $providedToken = trim($bodyToken);
+            }
+        }
+        $authenticatedUserId = $this->authenticatedCustomerId($request);
+        $authorized = $this->orders->getOrderAuthorized($orderId, $authenticatedUserId, $providedToken);
+        if ($authorized === null) {
+            $this->error('Order not found.', 404);
+        }
+        try {
+            $cancelled = $this->orders->cancelOrder($orderId);
+        } catch (ConflictException $e) {
+            $this->error($e->getMessage(), 409);
+        }
+        $data = $cancelled->toArray();
+        if ($providedToken === null || $providedToken === '') {
+            unset($data['lookup_token']);
+        }
+        $this->json(['data' => $data]);
+    }
+
+    /**
      * Extracts the single-purpose lookup token from query `?token=` or
      * header `X-Order-Token` (narrowly scoped, not Authorization).
      */

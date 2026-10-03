@@ -31,7 +31,10 @@ final class Order
         public string $paymentStatus,
         public string $createdAt,
         public ?string $lookupToken = null,
-        public array $items = []
+        public array $items = [],
+        public string $subtotalAmount = '0.00',
+        public string $shippingCost = '0.00',
+        public ?string $inventoryReleasedAt = null
     ) {
     }
 
@@ -54,12 +57,20 @@ final class Order
             (string) $row['payment_method'],
             (string) $row['payment_status'],
             (string) $row['created_at'],
-            $row['lookup_token'] ?? null
+            $row['lookup_token'] ?? null,
+            [],
+            isset($row['subtotal_amount']) ? (string) $row['subtotal_amount'] : (string) $row['total_amount'],
+            isset($row['shipping_cost']) ? (string) $row['shipping_cost'] : '0.00',
+            $row['inventory_released_at'] ?? null
         );
     }
 
     /**
      * Serializes the order for JSON responses.
+     *
+     * Exposes subtotal/shipping breakdown alongside total_amount so every
+     * surface (checkout, confirmation, WhatsApp, admin, email) renders the
+     * same final total. Private fields (lookup_token) stay gated by callers.
      */
     public function toArray(): array
     {
@@ -68,6 +79,8 @@ final class Order
             'user_id'          => $this->userId,
             'status'           => $this->status,
             'total_amount'     => $this->totalAmount,
+            'subtotal_amount'  => $this->subtotalAmount,
+            'shipping_cost'    => $this->shippingCost,
             'shipping_address' => $this->shippingAddress,
             'city'             => $this->city,
             'postal_code'      => $this->postalCode,
@@ -79,6 +92,13 @@ final class Order
             'created_at'       => $this->createdAt,
             'items'            => $this->items,
         ];
+
+        // Durable inventory-release marker (020). Exposed so admin tooling
+        // and payment polling can distinguish "stock still reserved" from
+        // "stock released" without inferring it from status combinations.
+        if ($this->inventoryReleasedAt !== null) {
+            $data['inventory_released_at'] = $this->inventoryReleasedAt;
+        }
 
         // Expose lookup_token only to the creator (store response) or
         // to an authorized holder. Controllers decide whether to strip it;

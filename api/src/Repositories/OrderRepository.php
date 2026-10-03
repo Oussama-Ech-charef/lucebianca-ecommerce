@@ -16,10 +16,18 @@ final class OrderRepository extends Repository
 {
     /**
      * Inserts an orders row (guest checkout: user_id NULL, status 'pending',
-     * payment_status 'pending').
+     * payment_status ALWAYS 'pending' at creation).
+     *
+     * Business rule (2026-10-03): COD and WhatsApp orders are NOT auto-paid.
+     * payment_status starts 'pending' for every method and becomes 'paid'
+     * only via (a) card callback success, or (b) an explicit admin
+     * confirmation (PUT /api/admin/orders/{id} {payment_status:'paid'}).
+     * This is enforced consistently in UI (Pending confirmation), admin
+     * (Pending badge), dashboard realized-order rule, and docs.
      *
      * @param array{
-     *   total_amount: string, shipping_address: string, city: string, postal_code: string,
+     *   total_amount: string, subtotal_amount?: string, shipping_cost?: string,
+     *   shipping_address: string, city: string, postal_code: string,
      *   customer_name: string, phone: string, email: string, payment_method: string
      * } $data Order columns.
      * @param int|null $userId Optional authenticated customer id — NULL for
@@ -44,12 +52,14 @@ final class OrderRepository extends Repository
 
         $stmt = $this->db->prepare(
             'INSERT INTO orders
-               (user_id, status, total_amount, shipping_address, city, postal_code, customer_name, phone, email, lookup_token, payment_method, payment_status)
+               (user_id, status, total_amount, subtotal_amount, shipping_cost, shipping_address, city, postal_code, customer_name, phone, email, lookup_token, payment_method, payment_status)
              VALUES
-               (:user_id, \'pending\', :total_amount, :shipping_address, :city, :postal_code, :customer_name, :phone, :email, :lookup_token, :payment_method, :payment_status)'
+               (:user_id, \'pending\', :total_amount, :subtotal_amount, :shipping_cost, :shipping_address, :city, :postal_code, :customer_name, :phone, :email, :lookup_token, :payment_method, \'pending\')'
         );
         $stmt->bindValue(':user_id', $userId, \PDO::PARAM_INT);
         $stmt->bindValue(':total_amount', $data['total_amount']);
+        $stmt->bindValue(':subtotal_amount', $data['subtotal_amount'] ?? $data['total_amount']);
+        $stmt->bindValue(':shipping_cost', $data['shipping_cost'] ?? '0.00');
         $stmt->bindValue(':shipping_address', $data['shipping_address']);
         $stmt->bindValue(':city', $data['city'] ?? '');
         $stmt->bindValue(':postal_code', $data['postal_code'] ?? '');
@@ -58,7 +68,6 @@ final class OrderRepository extends Repository
         $stmt->bindValue(':email', $data['email']);
         $stmt->bindValue(':lookup_token', $lookupToken);
         $stmt->bindValue(':payment_method', $data['payment_method']);
-        $stmt->bindValue(':payment_status', $data['payment_method'] === 'card' ? 'pending' : 'paid');
         $stmt->execute();
 
         return (int) $this->db->lastInsertId();
@@ -145,6 +154,24 @@ final class OrderRepository extends Repository
     }
 
     /**
+     * Restores stock for a variant (inventory policy: failed, cancelled and
+     * expired card-payment orders must not permanently lose stock).
+     * Unbounded increment — callers must only restore quantities previously
+     * decremented for the same order (see OrderService::restoreStockForOrder).
+     */
+    public function incrementStock(int $variantId, int $quantity): void
+    {
+        $stmt = $this->db->prepare(
+            'UPDATE product_variants
+                SET stock_quantity = stock_quantity + :quantity
+              WHERE id = :id'
+        );
+        $stmt->bindValue(':quantity', $quantity, \PDO::PARAM_INT);
+        $stmt->bindValue(':id', $variantId, \PDO::PARAM_INT);
+        $stmt->execute();
+    }
+
+    /**
      * Paginated, optionally status-filtered order list for the admin panel.
      *
      * The list payload stays light (scalability requirement 3.2 + phase-9
@@ -180,7 +207,7 @@ final class OrderRepository extends Repository
 
         $offset = ($page - 1) * $perPage;
         $stmt   = $this->db->prepare(
-            "SELECT o.id, o.customer_name, o.phone, o.total_amount, o.status,
+            "SELECT o.id, o.customer_name, o.phone, o.total_amount, o.subtotal_amount, o.shipping_cost, o.status,
                     o.payment_method, o.payment_status, o.created_at,
                     (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS item_count
                FROM orders o
@@ -222,7 +249,7 @@ final class OrderRepository extends Repository
 
         $offset = ($page - 1) * $perPage;
         $stmt   = $this->db->prepare(
-            'SELECT o.id, o.customer_name, o.phone, o.total_amount, o.status,
+            'SELECT o.id, o.customer_name, o.phone, o.total_amount, o.subtotal_amount, o.shipping_cost, o.status,
                     o.payment_method, o.payment_status, o.created_at,
                     (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS item_count
                FROM orders o
@@ -236,6 +263,110 @@ final class OrderRepository extends Repository
         $stmt->execute();
 
         return ['items' => $stmt->fetchAll(), 'total' => $total];
+    }
+
+    /**
+     * Finds an order by primary key, locking the row for the current
+     * transaction (SELECT ... FOR UPDATE).
+     *
+     * The caller MUST already be inside a transaction on the shared
+     * connection; the lock serializes concurrent release attempts
+     * (failed callback vs. expiry cron vs. cancellations) on one order.
+     *
+     * @return Order|null Null when the id does not exist.
+     */
+    public function findByIdForUpdate(int $id): ?Order
+    {
+        $stmt = $this->db->prepare('SELECT * FROM orders WHERE id = :id LIMIT 1 FOR UPDATE');
+        $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        $row = $stmt->fetch();
+
+        return $row === false ? null : Order::fromRow($row);
+    }
+
+    /**
+     * Atomically updates whitelisted order columns AND marks inventory
+     * released — but only when the order has not released inventory yet.
+     *
+     * This single conditional UPDATE is the idempotency backstop: even if
+     * two requests both pass the SELECT ... FOR UPDATE check (e.g. lock
+     * ordering across connections), only the first one claims the release.
+     *
+     * @param int   $id     Order id.
+     * @param array $fields Subset of: status, payment_status (validated by
+     *                      the caller against Order::STATUSES /
+     *                      Order::PAYMENT_STATUSES).
+     *
+     * @return bool True when this call claimed the release; false when
+     *              another request already released (caller must NOT restore
+     *              stock again).
+     */
+    public function updateStatusAndRelease(int $id, array $fields): bool
+    {
+        $allowed = ['status' => true, 'payment_status' => true];
+
+        $sets = ['inventory_released_at = NOW()'];
+        $bindings = [];
+        foreach ($fields as $key => $value) {
+            if (isset($allowed[$key])) {
+                $sets[] = "{$key} = :{$key}";
+                $bindings[":{$key}"] = (string) $value;
+            }
+        }
+
+        $stmt = $this->db->prepare(
+            'UPDATE orders SET ' . implode(', ', $sets)
+            . ' WHERE id = :id AND inventory_released_at IS NULL'
+        );
+        $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
+        foreach ($bindings as $param => $value) {
+            $stmt->bindValue($param, $value);
+        }
+        $stmt->execute();
+
+        return $stmt->rowCount() > 0;
+    }
+
+    /**
+     * Atomically marks inventory released without changing status columns
+     * (used when the status transition was already applied and only the
+     * stock restoration remains, e.g. legacy rows).
+     *
+     * @return bool True when this call claimed the release.
+     */
+    public function claimInventoryRelease(int $id): bool
+    {
+        $stmt = $this->db->prepare(
+            'UPDATE orders SET inventory_released_at = NOW()
+              WHERE id = :id AND inventory_released_at IS NULL'
+        );
+        $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->rowCount() > 0;
+    }
+
+    /**
+     * Atomically clears the release marker to re-reserve stock (card-payment
+     * retry after a failure released the reservation) — only when the order
+     * is still in a reservable state. Pair with guarded stock decrements in
+     * the same transaction (see OrderService).
+     *
+     * @return bool True when the marker was cleared (reservation re-opened).
+     */
+    public function clearInventoryRelease(int $id): bool
+    {
+        $stmt = $this->db->prepare(
+            "UPDATE orders SET inventory_released_at = NULL
+              WHERE id = :id AND inventory_released_at IS NOT NULL
+                AND status = 'pending' AND payment_status = 'failed'"
+        );
+        $stmt->bindValue(':id', $id, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->rowCount() > 0;
     }
 
     /**
