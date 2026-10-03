@@ -56,6 +56,7 @@ export default function Footer() {
                 alt=""
                 width={126}
                 height={84}
+                sizes="(max-width: 768px) 48px, 60px"
                 className="h-10 w-auto md:h-12"
               />
               <span className="font-serif text-base font-medium text-neutral-900 truncate max-w-[140px] sm:max-w-[180px] md:max-w-none">

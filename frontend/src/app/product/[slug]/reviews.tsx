@@ -24,10 +24,15 @@ interface Props {
 
 function StarRating({ rating, size = "text-lg" }: { rating: number; size?: string }) {
   return (
-    <div className="flex items-center">
+    <div
+      className="flex items-center"
+      role="img"
+      aria-label={`Rated ${rating} out of 5 stars`}
+    >
       {Array.from({ length: 5 }).map((_, i) => (
         <span
           key={i}
+          aria-hidden="true"
           className={`${size} ${
             i < rating ? "text-amber-500" : "text-neutral-300"
           }`}
@@ -35,7 +40,7 @@ function StarRating({ rating, size = "text-lg" }: { rating: number; size?: strin
           ★
         </span>
       ))}
-      <span className={`ml-2 ${size} text-neutral-600`}>
+      <span className={`ml-2 ${size} text-neutral-600`} aria-hidden="true">
         {rating}/5
       </span>
     </div>
@@ -173,29 +178,49 @@ export default function ProductReviews({ slug }: Props) {
       {showForm && (
         <form onSubmit={handleSubmit} className="mt-6 space-y-4 rounded-lg border border-neutral-200 p-6">
           {error && (
-            <div className="rounded bg-red-50 p-3 text-sm text-red-700">
+            <div id="review-form-error" role="alert" className="rounded bg-red-50 p-3 text-sm text-red-700">
               {error}
             </div>
           )}
 
           <div>
-            <label className="mb-2 block text-sm font-medium text-neutral-700">
+            <span id="review-rating-label" className="mb-2 block text-sm font-medium text-neutral-700">
               Rating
-            </label>
-            <div className="flex gap-2">
+            </span>
+            <div
+              role="radiogroup"
+              aria-labelledby="review-rating-label"
+              aria-required="true"
+              className="flex gap-2"
+              onKeyDown={(e) => {
+                if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setRating((r) => Math.min(5, r + 1));
+                } else if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setRating((r) => Math.max(1, r - 1));
+                }
+              }}
+            >
               {[1, 2, 3, 4, 5].map((star) => (
                 <button
                   key={star}
                   type="button"
+                  role="radio"
+                  aria-checked={star === rating}
+                  aria-label={`Rate ${star} star${star === 1 ? "" : "s"}${star === rating ? " (selected)" : ""}`}
                   onClick={() => setRating(star)}
-                  className="text-3xl transition-transform hover:scale-110 focus:outline-none"
+                  className="rounded text-3xl transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2"
                 >
-                  <span className={star <= rating ? "text-amber-500" : "text-neutral-300"}>
+                  <span aria-hidden="true" className={star <= rating ? "text-amber-500" : "text-neutral-300"}>
                     ★
                   </span>
                 </button>
               ))}
             </div>
+            <p className="mt-1 text-xs text-neutral-500" aria-live="polite">
+              Selected: {rating} out of 5
+            </p>
           </div>
 
           <div>
@@ -208,7 +233,8 @@ export default function ProductReviews({ slug }: Props) {
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               placeholder="Share your thoughts about this product..."
-              className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none"
+              aria-describedby={error ? "review-form-error" : undefined}
+              className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1"
             />
           </div>
 

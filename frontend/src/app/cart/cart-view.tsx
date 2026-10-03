@@ -2,9 +2,10 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 
 import { useCart } from "@/lib/cart-context";
-import { formatPrice } from "@/lib/storefront";
+import { fetchPublicSettings, formatPrice, type PublicSettings } from "@/lib/storefront";
 
 const stepperClass =
   "flex h-9 w-9 items-center justify-center rounded border border-neutral-300 text-lg text-neutral-600 transition-colors hover:border-neutral-900 disabled:cursor-not-allowed disabled:border-neutral-200 disabled:text-neutral-300";
@@ -12,6 +13,21 @@ const stepperClass =
 export default function CartView() {
   const { items, totalItems, totalPrice, updateQuantity, removeItem } =
     useCart();
+  const [settings, setSettings] = useState<PublicSettings | null>(null);
+  useEffect(() => {
+    fetchPublicSettings()
+      .then((res) => setSettings(res.data))
+      .catch(() => {});
+  }, []);
+  const shippingEstimate = (() => {
+    const cost = Number(settings?.shipping_cost ?? 0);
+    const threshold = Number(settings?.free_shipping_threshold ?? 0);
+    if (!Number.isFinite(cost) || cost <= 0) return 0;
+    if (Number.isFinite(threshold) && threshold > 0 && totalPrice >= threshold) {
+      return 0;
+    }
+    return cost;
+  })();
 
   if (items.length === 0) {
     return (
@@ -132,12 +148,18 @@ export default function CartView() {
             </div>
             <div className="flex items-center justify-between">
               <dt className="text-neutral-600">Delivery</dt>
-              <dd className="text-neutral-500">Calculated at checkout</dd>
+              <dd className="text-neutral-500 tabular-nums">
+                {shippingEstimate > 0
+                  ? `${formatPrice(shippingEstimate)} (est.)`
+                  : totalPrice > 0
+                    ? "Free (est.)"
+                    : "Calculated at checkout"}
+              </dd>
             </div>
             <div className="flex items-center justify-between border-t border-neutral-200 pt-3">
               <dt className="font-medium text-neutral-900">Total</dt>
               <dd className="font-serif text-lg tabular-nums">
-                {formatPrice(totalPrice)}
+                {formatPrice(totalPrice + shippingEstimate)}
               </dd>
             </div>
           </dl>

@@ -3,7 +3,7 @@ import { Suspense } from "react";
 
 import VerifyEmailView from "./verify-email-view";
 
-export const metadata: Metadata = { title: "Verify your email" };
+export const metadata: Metadata = { title: "Verify your email" , robots: { index: false, follow: false } };
 
 /**
  * /verify-email — confirm a customer's email address (phase 16).

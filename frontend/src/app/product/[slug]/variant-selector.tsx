@@ -111,7 +111,7 @@ export default function VariantSelector({
   }
 
   const chip =
-    "min-h-10 rounded-md border px-3 py-2 text-sm transition-colors focus:outline-none";
+    "min-h-10 rounded-md border px-3 py-2 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1";
   const chipEnabled =
     "border-neutral-300 hover:border-neutral-900 cursor-pointer";
   const chipDisabled = "border-neutral-200 text-neutral-300 cursor-not-allowed";
@@ -139,10 +139,10 @@ export default function VariantSelector({
       ) : (
         <>
           <div className="mt-6">
-            <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">
+            <p id="size-label" className="text-xs font-medium uppercase tracking-wide text-neutral-500">
               Size
             </p>
-            <div className="mt-2 flex flex-wrap gap-2">
+            <div role="radiogroup" aria-labelledby="size-label" className="mt-2 flex flex-wrap gap-2">
               {sizes.map((value) => {
                 const inStockSize = variants.some(
                   (variant) =>
@@ -152,9 +152,11 @@ export default function VariantSelector({
                   <button
                     key={value}
                     type="button"
+                    role="radio"
+                    aria-checked={size === value}
+                    aria-label={`Size ${value}${inStockSize ? "" : " (out of stock)"}`}
                     onClick={() => chooseSize(value)}
                     disabled={!inStockSize}
-                    aria-pressed={size === value}
                     className={`${chip} ${
                       size === value
                         ? "border-neutral-900 bg-neutral-900 text-white"
@@ -171,10 +173,10 @@ export default function VariantSelector({
           </div>
 
           <div className="mt-4">
-            <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">
+            <p id="color-label" className="text-xs font-medium uppercase tracking-wide text-neutral-500">
               Color
             </p>
-            <div className="mt-2 flex flex-wrap gap-2">
+            <div role="radiogroup" aria-labelledby="color-label" className="mt-2 flex flex-wrap gap-2">
               {colorsForSize.map((value) => {
                 const variant = variants.find(
                   (item) => item.size === size && item.color === value,
@@ -186,9 +188,11 @@ export default function VariantSelector({
                   <button
                     key={value}
                     type="button"
+                    role="radio"
+                    aria-checked={color === value}
+                    aria-label={`Color ${value}${inStockColor ? "" : " (out of stock)"}`}
                     onClick={() => setColor(value)}
                     disabled={!inStockColor}
-                    aria-pressed={color === value}
                     className={`${chip} ${
                       color === value
                         ? "border-neutral-900 bg-neutral-900 text-white"

@@ -100,9 +100,11 @@ function HeroMedia() {
       <Image
         src="/logo.png"
         alt=""
-        width={1536}
-        height={1024}
-        sizes="(min-width: 640px) 72rem, 26rem"
+        aria-hidden="true"
+        width={768}
+        height={512}
+        sizes="(min-width: 640px) 48rem, 20rem"
+        loading="lazy"
         className="pointer-events-none absolute -bottom-24 -right-20 h-80 w-[26rem] select-none object-cover opacity-15 motion-reduce:animate-none animate-watermark-drift sm:-bottom-48 sm:-right-24 sm:h-[48rem] sm:w-[72rem]"
       />
 

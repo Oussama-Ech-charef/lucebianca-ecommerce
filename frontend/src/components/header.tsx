@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useCart } from "@/lib/cart-context";
 import { useCustomerSession } from "@/lib/customer-auth";
@@ -34,11 +34,19 @@ export default function Header() {
   const { items, totalItems, totalPrice, updateQuantity, removeItem } =
     useCart();
   const customerSession = useCustomerSession();
+  // Focus return: remember the trigger so Escape/backdrop close restores it.
+  const lastTriggerRef = useRef<HTMLElement | null>(null);
+  const mobilePanelRef = useRef<HTMLElement | null>(null);
+  const cartPanelRef = useRef<HTMLDivElement | null>(null);
 
   const onCurrentRoute = overlays.path === pathname;
   const isOpen = (key: OverlayKey) => onCurrentRoute && overlays.open[key];
 
   function setOpen(key: OverlayKey, value: boolean) {
+    if (typeof document !== "undefined" && value) {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) lastTriggerRef.current = active;
+    }
     setOverlays((prev) => ({
       path: pathname,
       open: { ...prev.open, [key]: value },
@@ -46,20 +54,30 @@ export default function Header() {
   }
 
   function toggleOverlay(key: OverlayKey) {
+    if (typeof document !== "undefined") {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) lastTriggerRef.current = active;
+    }
     setOverlays((prev) => ({
       path: pathname,
       open: { ...prev.open, [key]: !(prev.path === pathname && prev.open[key]) },
     }));
   }
 
-  function closeAll() {
+  function closeAll(restoreFocus = false) {
     setOverlays((prev) => ({
       path: prev.path,
       open: { mobile: false, search: false, cart: false },
     }));
+    if (restoreFocus && lastTriggerRef.current) {
+      const el = lastTriggerRef.current;
+      setTimeout(() => el.focus(), 0);
+    }
   }
 
-  // Escape closes whichever overlay is open (menu / search / cart drawer).
+  // Escape closes whichever overlay is open (menu / search / cart drawer)
+  // and returns focus to the trigger. Background scroll locks while a
+  // modal drawer is open; focus moves into the panel on open.
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") {
@@ -69,10 +87,41 @@ export default function Header() {
         path: prev.path,
         open: { mobile: false, search: false, cart: false },
       }));
+      if (lastTriggerRef.current) {
+        const el = lastTriggerRef.current;
+        setTimeout(() => el.focus(), 0);
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  const anyDrawerOpen = isOpen("mobile") || isOpen("cart");
+  useEffect(() => {
+    if (anyDrawerOpen) {
+      document.body.style.overflow = "hidden";
+      const panel = isOpen("mobile") ? mobilePanelRef.current : cartPanelRef.current;
+      const focusTarget =
+        panel?.querySelector<HTMLElement>(
+          "button:not([disabled]), a[href], input:not([disabled])",
+        ) ?? null;
+      if (focusTarget) {
+        const t = setTimeout(() => focusTarget.focus(), 30);
+        return () => {
+          clearTimeout(t);
+          document.body.style.overflow = "";
+        };
+      }
+      return () => {
+        document.body.style.overflow = "";
+      };
+    }
+    document.body.style.overflow = "";
+    return () => {
+      document.body.style.overflow = "";
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlays.path, overlays.open.mobile, overlays.open.cart]);
 
   const isNavLinkActive = (href: string) =>
     pathname === href || pathname.startsWith(`${href}/`);
@@ -83,7 +132,7 @@ export default function Header() {
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6 lg:px-8 md:h-20">
           <Link
             href="/"
-            onClick={closeAll}
+            onClick={() => closeAll() }
             aria-label="Luce Bianca home"
             className="flex items-center gap-2 py-1 pr-3 sm:pr-4"
           >
@@ -93,6 +142,7 @@ export default function Header() {
               width={126}
               height={84}
               priority
+              sizes="(max-width: 768px) 48px, 60px"
               className="h-10 w-auto md:h-12"
             />
             <span className="font-serif text-base font-medium text-neutral-900 truncate max-w-[140px] sm:max-w-[180px] md:max-w-none">
@@ -194,7 +244,7 @@ export default function Header() {
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder="Search Luce Bianca…"
                   aria-label="Search Luce Bianca"
-                  className="w-full bg-transparent text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none"
+                  className="w-full bg-transparent text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1"
                 />
                 <button
                   type="button"
@@ -222,7 +272,10 @@ export default function Header() {
             className="absolute inset-0 bg-black/40"
           />
           <nav
+            ref={mobilePanelRef}
             aria-label="Mobile"
+            role="dialog"
+            aria-modal="true"
             className="absolute bottom-0 right-0 top-0 flex w-72 max-w-[80%] flex-col bg-white p-6 shadow-xl"
           >
             <div className="flex items-center justify-between">
@@ -243,7 +296,7 @@ export default function Header() {
                   <Link
                     key={link.href}
                     href={link.href}
-                    onClick={closeAll}
+                    onClick={() => closeAll() }
                     aria-current={active ? "page" : undefined}
                     className={`font-serif text-2xl ${
                       active
@@ -282,7 +335,13 @@ export default function Header() {
             onClick={() => setOpen("cart", false)}
             className="absolute inset-0 bg-black/40"
           />
-          <div className="absolute right-0 top-0 flex max-h-[85vh] w-full max-w-sm flex-col border-l border-neutral-200 bg-white shadow-xl">
+          <div
+            ref={cartPanelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Shopping cart"
+            className="absolute right-0 top-0 flex max-h-[85vh] w-full max-w-sm flex-col border-l border-neutral-200 bg-white shadow-xl"
+          >
             <div className="flex items-center justify-between border-b border-neutral-200 px-6 py-5">
               <h2 className="font-serif text-xl">Your Cart</h2>
               <button
