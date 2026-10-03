@@ -51,6 +51,17 @@ final class ReviewController extends Controller
         }
 
         $userId = (int) $claims['sub'];
+        // Email-verification policy (enforced server-side): only verified
+        // accounts may publish reviews. Google accounts are verified at
+        // creation; password accounts must complete /verify-email first.
+        $userRepo = new \App\Repositories\UserRepository();
+        $author = $userRepo->findById($userId);
+        if ($author === null) {
+            $this->error('Account not found.', 404);
+        }
+        if (!$author->emailVerified) {
+            $this->error('Please verify your email before submitting a review.', 403);
+        }
         $rating = $request->input('rating');
         $comment = trim((string) $request->input('comment', ''));
 

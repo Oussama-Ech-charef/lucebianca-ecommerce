@@ -77,4 +77,17 @@ class RefreshTokenRepository extends Repository
         $stmt->bindValue(':token_hash', $tokenHash);
         $stmt->execute();
     }
+
+    /**
+     * Revokes every active refresh token for a principal (password reset /
+     * compromise recovery). Idempotent.
+     */
+    public function revokeAllForUser(int $principalId): void
+    {
+        $stmt = $this->db->prepare(
+            "UPDATE {$this->table} SET revoked_at = NOW() WHERE {$this->idColumn} = :id AND revoked_at IS NULL"
+        );
+        $stmt->bindValue(':id', $principalId, \PDO::PARAM_INT);
+        $stmt->execute();
+    }
 }

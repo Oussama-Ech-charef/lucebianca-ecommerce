@@ -11,15 +11,17 @@ use App\Services\AuthService;
 /**
  * AuthController — public registration / login / Google OAuth.
  *
- * register, login, refresh and logout are implemented (password_hash, JWT +
- * refresh token issuance via App\Services\AuthService). google() verifies a
- * Google ID token server-side and creates-or-links the account by email.
- * Server-side validation errors become 422 with per-field details; a
- * duplicate email is 409; bad credentials are 401; a failed Google
- * verification is 401; Google being unreachable is 502.
+ * Session security: the long-lived refresh token is issued BOTH as a
+ * JSON field (backward compat for existing localStorage clients) AND as
+ * an HttpOnly/Secure/SameSite=Lax cookie (`lb_customer_refresh`). New
+ * clients should prefer the cookie (JS cannot read it — XSS cannot steal
+ * it) by sending `credentials: "include"` and omitting the body token;
+ * refresh/logout accept either source (body wins when both present).
  */
 final class AuthController extends Controller
 {
+    private const REFRESH_COOKIE = 'lb_customer_refresh';
+
     private AuthService $auth;
 
     public function __construct()
@@ -49,6 +51,7 @@ final class AuthController extends Controller
             $this->error($e->getMessage(), 409);
         }
 
+        \App\Core\Response::refreshCookie(self::REFRESH_COOKIE, (string) ($payload['refresh_token'] ?? ''), (int) \App\Core\Env::get('JWT_REFRESH_TTL_SECONDS', 604800));
         $this->json($payload, 201);
     }
 
@@ -71,48 +74,57 @@ final class AuthController extends Controller
             $this->error($e->getMessage(), 401);
         }
 
+        \App\Core\Response::refreshCookie(self::REFRESH_COOKIE, (string) ($payload['refresh_token'] ?? ''), (int) \App\Core\Env::get('JWT_REFRESH_TTL_SECONDS', 604800));
         $this->json($payload);
     }
 
     /**
      * POST /api/auth/refresh — exchanges a refresh token for a new pair.
      *
-     * The presented refresh token is rotated (revoked + replaced), so it can
-     * only be used once; the access JWT returned is a fresh short-lived token.
+     * Accepts the token from JSON body OR the HttpOnly cookie (body wins).
+     * Rotation + cookie re-issue keep both transports in sync.
      *
      * @return never 200 with a new auth payload, 422 on missing token,
      *               401 on unknown/revoked/expired token.
      */
     public function refresh(Request $request): never
     {
+        $bodyToken = (string) $request->input('refresh_token', '');
+        $cookieToken = (string) ($_COOKIE[self::REFRESH_COOKIE] ?? '');
+        $presented = $bodyToken !== '' ? $bodyToken : $cookieToken;
         try {
-            $payload = $this->auth->refresh((string) $request->input('refresh_token', ''));
+            $payload = $this->auth->refresh($presented);
         } catch (ValidationException $e) {
             $this->error($e->getMessage(), 422, ['errors' => $e->errors()]);
         } catch (InvalidCredentialsException $e) {
             $this->error($e->getMessage(), 401);
         }
 
+        \App\Core\Response::refreshCookie(self::REFRESH_COOKIE, (string) ($payload['refresh_token'] ?? ''), (int) \App\Core\Env::get('JWT_REFRESH_TTL_SECONDS', 604800));
         $this->json($payload);
     }
 
     /**
      * POST /api/auth/logout — revokes the client's refresh token.
      *
-     * Idempotent: a missing/unknown token still yields 204, so repeat
-     * logouts never fail. The access JWT stays valid until its own TTL
-     * (short-lived by design).
+     * Accepts body or cookie; clears the cookie. Idempotent.
      *
      * @return never 204 on success, 422 on missing token.
      */
     public function logout(Request $request): never
     {
+        $bodyToken = (string) $request->input('refresh_token', '');
+        $cookieToken = (string) ($_COOKIE[self::REFRESH_COOKIE] ?? '');
+        $presented = $bodyToken !== '' ? $bodyToken : $cookieToken;
         try {
-            $this->auth->logout((string) $request->input('refresh_token', ''));
+            $this->auth->logout($presented);
         } catch (ValidationException $e) {
+            // Still clear the cookie — the client asked to log out.
+            \App\Core\Response::refreshCookie(self::REFRESH_COOKIE, '', -1);
             $this->error($e->getMessage(), 422, ['errors' => $e->errors()]);
         }
 
+        \App\Core\Response::refreshCookie(self::REFRESH_COOKIE, '', -1);
         $this->noContent();
     }
 
@@ -140,6 +152,7 @@ final class AuthController extends Controller
             $this->error('Google sign-in is temporarily unavailable. Please try again.', 502);
         }
 
+        \App\Core\Response::refreshCookie(self::REFRESH_COOKIE, (string) ($payload['refresh_token'] ?? ''), (int) \App\Core\Env::get('JWT_REFRESH_TTL_SECONDS', 604800));
         $this->json($payload);
     }
 
@@ -187,5 +200,52 @@ final class AuthController extends Controller
         $this->json([
             'message' => 'If that email belongs to an unverified account, a verification email is on its way.',
         ]);
+    }
+
+    /**
+     * POST /api/auth/forgot-password — request a one-time reset link.
+     *
+     * Anti-enumeration: identical 200 whether the email exists or not.
+     * Rate-limited (see routes.php). Only a real account gets a fresh
+     * single-use 1h token (old one invalidated); refresh sessions are
+     * revoked on successful reset.
+     *
+     * @return never 200 with a generic message, 422 on invalid email.
+     */
+    public function forgotPassword(Request $request): never
+    {
+        try {
+            $this->auth->requestPasswordReset((string) $request->input('email', ''));
+        } catch (ValidationException $e) {
+            $this->error($e->getMessage(), 422, ['errors' => $e->errors()]);
+        }
+
+        $this->json([
+            'message' => 'If that email belongs to an account, a reset link is on its way (expires in 1 hour).',
+        ]);
+    }
+
+    /**
+     * POST /api/auth/reset-password — complete a reset with the emailed token.
+     *
+     * Body: {"token": "...", "password": "new-password-8+"}. Single-use:
+     * success clears the token and revokes all refresh sessions.
+     *
+     * @return never 200 on success, 422 on weak input, 400 on invalid/expired token.
+     */
+    public function resetPassword(Request $request): never
+    {
+        try {
+            $this->auth->resetPassword(
+                (string) $request->input('token', ''),
+                (string) $request->input('password', '')
+            );
+        } catch (ValidationException $e) {
+            $this->error($e->getMessage(), 422, ['errors' => $e->errors()]);
+        } catch (InvalidCredentialsException $e) {
+            $this->error($e->getMessage(), 400);
+        }
+
+        $this->json(['message' => 'Your password has been reset. You can now sign in.']);
     }
 }

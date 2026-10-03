@@ -20,7 +20,9 @@ final class User
         public ?string $googleId = null,
         public bool $emailVerified = false,
         public ?string $emailVerificationToken = null,
-        public ?string $emailVerificationExpiresAt = null
+        public ?string $emailVerificationExpiresAt = null,
+        public ?string $passwordResetHash = null,
+        public ?string $passwordResetExpiresAt = null
     ) {
     }
 
@@ -39,7 +41,9 @@ final class User
             $row['google_id'] ?? null,
             (bool) ($row['email_verified'] ?? 0),
             $row['email_verification_token'] ?? null,
-            $row['email_verification_expires_at'] ?? null
+            $row['email_verification_expires_at'] ?? null,
+            $row['password_reset_hash'] ?? null,
+            $row['password_reset_expires_at'] ?? null
         );
     }
 

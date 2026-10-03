@@ -43,6 +43,10 @@ final class CsrfProtection
     /**
      * Validate a CSRF token.
      *
+     * Fail-closed on secret misconfiguration: when signing throws (missing/
+     * weak JWT_SECRET) the token is treated as invalid instead of raising a
+     * 500 — the CsrfMiddleware then returns a clean 403.
+     *
      * @param string $token The token to validate
      * @return bool True if valid and not expired, false otherwise
      */
@@ -78,13 +82,23 @@ final class CsrfProtection
             return false;
         }
 
-        // Verify signature
-        $expectedSignature = self::sign($timestamp);
+        // Verify signature (fail closed when the secret is misconfigured).
+        try {
+            $expectedSignature = self::sign($timestamp);
+        } catch (\RuntimeException) {
+            return false;
+        }
         return hash_equals($expectedSignature, $signature);
     }
 
     /**
      * Sign a timestamp with the secret key.
+     *
+     * Fail-closed: reuses the same JWT_SECRET strength rules as Auth
+     * (present, non-empty, >=32 chars, not a known placeholder). A missing,
+     * empty, weak or placeholder secret throws instead of signing with a
+     * predictable value — no CSRF tokens are issued or accepted without a
+     * real secret.
      *
      * @param int $timestamp Unix timestamp
      * @return string HMAC-SHA256 signature
@@ -92,11 +106,16 @@ final class CsrfProtection
     private static function sign(int $timestamp): string
     {
         $secret = Env::get('JWT_SECRET'); // Reuse JWT secret for CSRF signing
-        if ($secret === null) {
-            throw new \RuntimeException('JWT_SECRET environment variable not set');
+        if (!is_string($secret) || trim($secret) === '') {
+            throw new \RuntimeException('JWT_SECRET is not configured — failing closed.');
+        }
+        $trimmed = trim($secret);
+        $weak = ['insecure-default-secret', 'change-me', 'secret', 'changeme'];
+        if (in_array(strtolower($trimmed), $weak, true) || mb_strlen($trimmed) < 32) {
+            throw new \RuntimeException('JWT_SECRET is missing or too weak — failing closed (need ≥32 random chars).');
         }
 
-        return hash_hmac('sha256', (string) $timestamp, $secret);
+        return hash_hmac('sha256', (string) $timestamp, $trimmed);
     }
 
     /**

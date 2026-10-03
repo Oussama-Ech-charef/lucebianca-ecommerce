@@ -112,9 +112,11 @@ $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 if ($origin !== '' && in_array($origin, $allowedOrigins, true)) {
     header('Access-Control-Allow-Origin: ' . $origin);
     header('Vary: Origin');
+    // Required for HttpOnly refresh cookies (credentials:include).
+    header('Access-Control-Allow-Credentials: true');
 }
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-CSRF-Token');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, X-CSRF-Token, X-Order-Token');
 header('Access-Control-Max-Age: 86400');
 
 // Handle CORS preflight before any routing.

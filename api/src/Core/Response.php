@@ -58,4 +58,38 @@ final class Response
         http_response_code(204);
         exit;
     }
+
+    /**
+     * Sets an HttpOnly refresh-token cookie (safer than localStorage for
+     * the long-lived credential — JS cannot read it, mitigating XSS theft).
+     * Access JWTs stay in memory/localStorage (short-lived, sent as Bearer).
+     *
+     * @param string $name  Cookie name (lb_customer_refresh / lb_admin_refresh).
+     * @param string $value Raw refresh token (empty + past expiry to clear).
+     * @param int    $ttl   Seconds until expiry (0 = session, negative = delete).
+     */
+    public static function refreshCookie(string $name, string $value, int $ttl): void
+    {
+        $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+        // SameSite=Lax keeps top-level navigation (CMI return, email links)
+        // working while blocking third-party POST CSRF. HttpOnly blocks JS.
+        $parts = [
+            rawurlencode($name) . '=' . rawurlencode($value),
+            'Path=/',
+            'HttpOnly',
+            'SameSite=Lax',
+        ];
+        if ($secure) {
+            $parts[] = 'Secure';
+        }
+        if ($ttl > 0) {
+            $parts[] = 'Max-Age=' . $ttl;
+            $parts[] = 'Expires=' . gmdate('D, d M Y H:i:s T', time() + $ttl);
+        } elseif ($ttl < 0) {
+            $parts[] = 'Max-Age=0';
+            $parts[] = 'Expires=Thu, 01 Jan 1970 00:00:00 GMT';
+        }
+        header('Set-Cookie: ' . implode('; ', $parts), false);
+    }
 }

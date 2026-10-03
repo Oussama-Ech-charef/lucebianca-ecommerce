@@ -155,4 +155,66 @@ final class UserRepository extends Repository
         $stmt->bindValue(':id', $userId, \PDO::PARAM_INT);
         $stmt->execute();
     }
+
+    /**
+     * Finds a user by their password-reset token hash (single-use lookup).
+     */
+    public function findByPasswordResetHash(string $hash): ?User
+    {
+        $stmt = $this->db->prepare(
+            'SELECT * FROM users WHERE password_reset_hash = :hash LIMIT 1'
+        );
+        $stmt->bindValue(':hash', $hash);
+        $stmt->execute();
+
+        $row = $stmt->fetch();
+
+        return $row === false ? null : User::fromRow($row);
+    }
+
+    /**
+     * Stores a fresh password-reset hash + expiry (overwrites any pending one).
+     */
+    public function setPasswordReset(int $userId, string $hash, string $expiresAt): void
+    {
+        $stmt = $this->db->prepare(
+            'UPDATE users
+                SET password_reset_hash = :hash,
+                    password_reset_expires_at = :expires_at
+              WHERE id = :id'
+        );
+        $stmt->bindValue(':hash', $hash);
+        $stmt->bindValue(':expires_at', $expiresAt);
+        $stmt->bindValue(':id', $userId, \PDO::PARAM_INT);
+        $stmt->execute();
+    }
+
+    /**
+     * Clears a password-reset token (single-use invalidation on success).
+     */
+    public function clearPasswordReset(int $userId): void
+    {
+        $stmt = $this->db->prepare(
+            'UPDATE users
+                SET password_reset_hash = NULL,
+                    password_reset_expires_at = NULL
+              WHERE id = :id'
+        );
+        $stmt->bindValue(':id', $userId, \PDO::PARAM_INT);
+        $stmt->execute();
+    }
+
+    /**
+     * Updates a user's password hash (revokes reset token implicitly via
+     * clearPasswordReset in the service layer).
+     */
+    public function updatePasswordHash(int $userId, string $hash): void
+    {
+        $stmt = $this->db->prepare(
+            'UPDATE users SET password_hash = :hash WHERE id = :id'
+        );
+        $stmt->bindValue(':hash', $hash);
+        $stmt->bindValue(':id', $userId, \PDO::PARAM_INT);
+        $stmt->execute();
+    }
 }

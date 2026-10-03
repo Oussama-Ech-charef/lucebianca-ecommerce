@@ -132,6 +132,27 @@ final class OrdersController extends Controller
             $this->error('Validation failed.', 422, ['errors' => $errors]);
         }
 
+        // Inventory policy: admin moving an order to cancelled restores its
+        // reserved stock exactly once (only from pending/processing — terminal
+        // or fulfilled states cannot be cancelled).
+        $current = $this->orderService->getOrder($id);
+        if (isset($fields['status']) && $fields['status'] === 'cancelled' && $current !== null && $current->status !== 'cancelled') {
+            if (!in_array($current->status, ['pending', 'processing'], true)) {
+                $this->error('Only pending or processing orders can be cancelled.', 409);
+            }
+            try {
+                $updated = $this->orderService->cancelOrder($id);
+            } catch (\App\Core\ConflictException $e) {
+                $this->error($e->getMessage(), 409);
+            }
+            // Apply a simultaneous payment_status change if requested (e.g.
+            // marking failed) after the cancellation.
+            if (isset($fields['payment_status']) && $fields['payment_status'] !== $updated->paymentStatus) {
+                $updated = $this->orderService->updateStatus($id, ['payment_status' => $fields['payment_status']]);
+            }
+            $this->json(['data' => $updated->toArrayWithoutLookupToken()]);
+        }
+
         $updated = $this->orderService->updateStatus($id, $fields);
 
         $this->json(['data' => $updated->toArrayWithoutLookupToken()]);

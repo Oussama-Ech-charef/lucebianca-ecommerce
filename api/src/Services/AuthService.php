@@ -431,4 +431,63 @@ final class AuthService
 
         return $local === '' ? 'Customer' : $local;
     }
+
+    /** Password-reset links stop working 1 h after issue. */
+    private const RESET_TTL_SECONDS = 3600;
+
+    /**
+     * Starts a password reset (anti-enumeration: identical response whether
+     * the email exists or not; only a real account gets a fresh single-use
+     * token that invalidates any previous one).
+     *
+     * @throws ValidationException When the email is missing/invalid.
+     */
+    public function requestPasswordReset(string $email): void
+    {
+        $errors = Validator::validate(['email' => $email], ['email' => ['required', 'email']]);
+        if ($errors !== []) {
+            throw new ValidationException($errors);
+        }
+        $normalized = strtolower(trim($email));
+        $user = $this->users->findByEmail($normalized);
+        if ($user === null) {
+            return;
+        }
+        $raw = bin2hex(random_bytes(32));
+        $hash = hash('sha256', $raw);
+        $expiresAt = date('Y-m-d H:i:s', time() + self::RESET_TTL_SECONDS);
+        $this->users->setPasswordReset($user->id, $hash, $expiresAt);
+        $link = $this->verificationBaseUrl() . '/reset-password?token=' . rawurlencode($raw);
+        try {
+            $this->email->sendPasswordResetEmail($user->email, $user->name, $link);
+        } catch (\Throwable $e) {
+            error_log('Luce Bianca: password-reset email not sent: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Completes a password reset with a one-time token.
+     *
+     * @throws ValidationException When token/password are missing or weak.
+     * @throws InvalidCredentialsException When the token is unknown/expired/used.
+     */
+    public function resetPassword(string $token, string $newPassword): void
+    {
+        $errors = Validator::validate(
+            ['token' => $token, 'password' => $newPassword],
+            ['token' => ['required'], 'password' => ['required', ['min', self::MIN_PASSWORD_LENGTH]]]
+        );
+        if ($errors !== []) {
+            throw new ValidationException($errors);
+        }
+        $hash = hash('sha256', $token);
+        $user = $this->users->findByPasswordResetHash($hash);
+        if ($user === null || $user->passwordResetExpiresAt === null || strtotime($user->passwordResetExpiresAt) < time()) {
+            throw new InvalidCredentialsException('This reset link is invalid or has expired. Request a new one.');
+        }
+        $this->users->updatePasswordHash($user->id, password_hash($newPassword, PASSWORD_DEFAULT));
+        // Single-use invalidation + revoke all refresh tokens (session revocation).
+        $this->users->clearPasswordReset($user->id);
+        $this->refreshTokens->revokeAllForUser($user->id);
+    }
 }
