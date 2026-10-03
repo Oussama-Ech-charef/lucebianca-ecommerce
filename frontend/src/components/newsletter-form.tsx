@@ -100,7 +100,7 @@ export default function NewsletterForm() {
             disabled={submitting}
             aria-invalid={hasError}
             aria-describedby={notice ? "newsletter-notice" : undefined}
-            className="w-full min-h-10 rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none disabled:bg-neutral-50"
+            className="w-full min-h-10 rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1 disabled:bg-neutral-50"
           />
           <button
             type="submit"

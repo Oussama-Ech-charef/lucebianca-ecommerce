@@ -41,13 +41,15 @@ final class NewsletterRepository extends Repository
     }
 
     /**
-     * Unsubscribe an email.
+     * Unsubscribe an email. Restores nothing else; the audit counter records
+     * every effective unsubscribe (repeated calls on an inactive address are
+     * no-ops and do not increment).
      */
     public function unsubscribe(string $email): bool
     {
         $stmt = $this->db->prepare("
             UPDATE newsletter_subscribers
-            SET is_active = 0, unsubscribed_at = NOW()
+            SET is_active = 0, unsubscribed_at = NOW(), unsubscribe_count = unsubscribe_count + 1
             WHERE email = :email AND is_active = 1
         ");
         $stmt->bindValue(':email', $email, PDO::PARAM_STR);

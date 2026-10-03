@@ -54,6 +54,7 @@ $loginRateLimit = new RateLimitMiddleware('login', 5, 300);
 $registerRateLimit = new RateLimitMiddleware('register', 5, 300);
 $contactRateLimit = new RateLimitMiddleware('contact', 3, 600);
 $adminLoginRateLimit = new RateLimitMiddleware('admin_login', 5, 300);
+$passwordResetRateLimit = new RateLimitMiddleware('password_reset', 5, 900);
 
 // CSRF protection for state-changing operations
 $csrfProtection = new CsrfMiddleware();
@@ -82,15 +83,21 @@ $router->post('/api/wishlist', [WishlistController::class, 'store'], [$csrfProte
 $router->delete('/api/wishlist/{productId}', [WishlistController::class, 'destroy'], [$csrfProtection]);
 
 // --- Newsletter (public) ---
+// Subscribe is CSRF-guarded + rate-limited; unsubscribe is a signed-token
+// POST (state-changing, never GET — scanners/prefetchers must not mutate).
+// GET only validates the emailed link (read-only) for the confirm page.
 $router->post('/api/newsletter/subscribe', [NewsletterController::class, 'subscribe'], [$csrfProtection, $contactRateLimit]);
 $router->post('/api/newsletter/unsubscribe', [NewsletterController::class, 'unsubscribe']);
+$router->get('/api/newsletter/unsubscribe', [NewsletterController::class, 'verify']);
 
 // --- Cart + checkout (CSRF protected for state-changing operations) ---
 $router->post('/api/cart', [CartController::class, 'store'], [$csrfProtection]);
 $router->post('/api/orders', [OrderController::class, 'store'], [$csrfProtection]);
 $router->get('/api/orders/{id}', [OrderController::class, 'show']);
+$router->post('/api/orders/{id}/cancel', [OrderController::class, 'cancel'], [$csrfProtection]);
 
 // --- Payments (CMI/Payzone card payment gateway) ---
+$router->get('/api/payments/config', [PaymentController::class, 'config']);
 $router->post('/api/payments/initiate', [PaymentController::class, 'initiate'], [$csrfProtection]);
 $router->post('/api/payments/callback', [PaymentController::class, 'callback']); // CMI callback, no CSRF
 $router->get('/api/payments/status/{orderId}', [PaymentController::class, 'status']);
@@ -103,6 +110,8 @@ $router->post('/api/auth/logout', [AuthController::class, 'logout']);
 $router->post('/api/auth/google', [AuthController::class, 'google']);
 $router->get('/api/auth/verify-email', [AuthController::class, 'verifyEmail']);
 $router->post('/api/auth/resend-verification', [AuthController::class, 'resendVerification']);
+$router->post('/api/auth/forgot-password', [AuthController::class, 'forgotPassword'], [$passwordResetRateLimit]);
+$router->post('/api/auth/reset-password', [AuthController::class, 'resetPassword'], [$passwordResetRateLimit]);
 
 // --- Customer account (JWT role "user" on every route) ---
 $customerMiddleware = [new AuthMiddleware('user')];
@@ -122,6 +131,7 @@ $adminMiddleware = [new AuthMiddleware('admin')];
 // There is no public admin registration; admins are seeded offline via
 // api/scripts/create-admin.php.
 $router->post('/api/admin/auth/login', [AdminAuthController::class, 'login'], [$adminLoginRateLimit]);
+$router->get('/api/admin/auth/me', [AdminAuthController::class, 'me'], $adminMiddleware);
 
 // Admin CRUD operations (JWT auth + CSRF protection on state-changing)
 $adminCsrf = array_merge($adminMiddleware, [$csrfProtection]);
