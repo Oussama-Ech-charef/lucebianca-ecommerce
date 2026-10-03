@@ -6,19 +6,16 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { clearAdminSession, getAdminSession } from "@/lib/admin";
+import { API_URL } from "@/lib/config";
 
 /**
  * Protected admin shell.
  *
- * Guards /admin/* pages beyond the server-side proxy cookie check: on mount it
- * verifies the admin session actually exists in localStorage (a cookie could
- * survive a cleared storage, or the JWT could have expired). When it's gone it
- * clears the gate cookie and redirects to /admin/login — the same mechanism
- * the proxy uses, kept consistent.
- *
- * Header visually matches the storefront header: same logo treatment, spacing,
- * typography, responsive behavior, and mobile drawer. Navigation lists exactly
- * the admin sections that exist as routes with underline active state.
+ * Real route guard (beyond the proxy's cookie-presence check): on mount it
+ * verifies the admin JWT against GET /api/admin/auth/me. A missing session,
+ * an expired/invalid JWT (401), or a deleted account (404) clears the
+ * session + gate cookie and redirects to /admin/login. Cookie presence
+ * alone never grants access — the API verifies the JWT on every request.
  */
 
 const ADMIN_SECTIONS = [
@@ -49,10 +46,31 @@ export default function AdminShell({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    if (getAdminSession() === null) {
+    const session = getAdminSession();
+    if (session === null) {
       clearAdminSession();
       router.replace("/admin/login");
+      return;
     }
+    // Real verification: the JWT itself must still be valid (not just present).
+    let cancelled = false;
+    fetch(`${API_URL}/api/admin/auth/me`, {
+      headers: { Authorization: `Bearer ${session.token}` },
+    })
+      .then((res) => {
+        if (cancelled) return;
+        if (!res.ok) {
+          clearAdminSession();
+          router.replace("/admin/login");
+        }
+      })
+      .catch(() => {
+        // Network failure — keep the shell (API calls will surface 401s
+        // individually); do not log out on transient errors.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   useEffect(() => {

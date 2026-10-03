@@ -22,7 +22,7 @@ import {
  */
 
 const inputClass =
-  "mt-1.5 w-full rounded-lg border border-neutral-300 px-3 py-3 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none";
+  "mt-1.5 w-full rounded-lg border border-neutral-300 px-3 py-3 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1";
 
 export default function LoginView() {
   const router = useRouter();
@@ -113,10 +113,19 @@ export default function LoginView() {
         <button
           type="submit"
           disabled={submitting}
-          className="mt-6 w-full rounded-lg bg-neutral-900 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-60"
+          aria-busy={submitting}
+          className="mt-6 w-full rounded-lg bg-neutral-900 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-2"
         >
           {submitting ? "Signing in…" : "Sign in"}
         </button>
+        <p className="mt-3 text-center text-sm">
+          <Link
+            href="/forgot-password"
+            className="text-neutral-600 underline underline-offset-4 hover:text-neutral-900"
+          >
+            Forgot your password?
+          </Link>
+        </p>
       </form>
 
       <div className="my-6 flex items-center gap-4">

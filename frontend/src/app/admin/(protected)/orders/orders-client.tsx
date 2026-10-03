@@ -76,6 +76,11 @@ function StatusBadge({ status }: { status: OrderStatus }) {
 }
 
 function OrderItems({ detail }: { detail: OrderDetail }) {
+  const subtotal =
+    (detail as { subtotal_amount?: string }).subtotal_amount ??
+    detail.total_amount;
+  const shipping =
+    (detail as { shipping_cost?: string }).shipping_cost ?? "0.00";
   return (
     <div className="text-sm">
       <ul className="divide-y divide-neutral-100">
@@ -99,14 +104,29 @@ function OrderItems({ detail }: { detail: OrderDetail }) {
           </li>
         ))}
       </ul>
-      <div className="mt-1 flex items-center justify-between border-t border-neutral-200 pt-2">
-        <span className="text-neutral-600">Total</span>
-        <span className="font-serif text-base tabular-nums">
-          {formatPrice(detail.total_amount)}
-        </span>
-      </div>
+      <dl className="mt-1 space-y-1 border-t border-neutral-200 pt-2 text-sm">
+        <div className="flex items-center justify-between">
+          <dt className="text-neutral-600">Subtotal</dt>
+          <dd className="tabular-nums">{formatPrice(subtotal)}</dd>
+        </div>
+        <div className="flex items-center justify-between">
+          <dt className="text-neutral-600">Shipping</dt>
+          <dd className="tabular-nums">
+            {Number(shipping) > 0 ? formatPrice(shipping) : "Free"}
+          </dd>
+        </div>
+        <div className="flex items-center justify-between font-medium">
+          <dt>Total</dt>
+          <dd className="font-serif text-base tabular-nums">
+            {formatPrice(detail.total_amount)}
+          </dd>
+        </div>
+      </dl>
       <p className="mt-2 whitespace-pre-line text-xs text-neutral-500">
         {detail.shipping_address}
+        {[detail.city, detail.postal_code].filter(Boolean).length > 0
+          ? `\n${[detail.city, detail.postal_code].filter(Boolean).join(", ")}`
+          : null}
       </p>
     </div>
   );
@@ -212,6 +232,16 @@ export default function OrdersClient() {
       redirectToLogin();
       return;
     }
+    if (status === "cancelled") {
+      const ok = window.confirm(
+        `Cancel order #${orderId}? Reserved stock will be restored. This cannot be undone.`,
+      );
+      if (!ok) {
+        // Reset the select by re-rendering (state unchanged already).
+        setUpdatingId(null);
+        return;
+      }
+    }
     setUpdatingId(orderId);
     setUpdateError(null);
     try {
@@ -284,6 +314,26 @@ export default function OrdersClient() {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape" && isModalOpen) {
         closeModal();
+      }
+      // Simple focus trap: keep Tab inside the dialog while open.
+      if (event.key === "Tab" && isModalOpen) {
+        const dialog = document.querySelector('[data-order-dialog="true"]');
+        if (!dialog) return;
+        const focusables = Array.from(
+          dialog.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled])',
+          ),
+        ).filter((el) => el.offsetParent !== null);
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -568,10 +618,16 @@ export default function OrdersClient() {
             onClick={closeModal}
             className="absolute inset-0 bg-black/40"
           />
-          <div className="relative max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
+          <div
+            data-order-dialog="true"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="order-dialog-title"
+            className="relative max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl"
+          >
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h2 className="font-serif text-xl">Order #{selectedOrder.id}</h2>
+                <h2 id="order-dialog-title" className="font-serif text-xl">Order #{selectedOrder.id}</h2>
                 <p className="mt-1 text-sm text-neutral-500">
                   {formatDate(selectedOrder.created_at)}
                 </p>
@@ -625,9 +681,54 @@ export default function OrdersClient() {
                       <span className="text-neutral-500">Method:</span>{" "}
                       {PAYMENT_LABELS[detail.payment_method] ?? detail.payment_method}
                     </p>
-                    <p className="text-sm">
-                      <span className="text-neutral-500">Payment:</span>{" "}
-                      {PAYMENT_STATUS_LABELS[detail.payment_status]}
+                    <div className="mt-2 flex items-center gap-2 text-sm">
+                      <label htmlFor={`payment-status-${detail.id}`} className="text-neutral-500">
+                        Payment:
+                      </label>
+                      <select
+                        id={`payment-status-${detail.id}`}
+                        aria-label={`Payment status for order #${detail.id}`}
+                        value={detail.payment_status}
+                        disabled={updatingId === detail.id}
+                        onChange={async (e) => {
+                          const token = getAdminSession()?.token;
+                          if (!token) return;
+                          const next = e.target.value as PaymentStatus;
+                          setUpdatingId(detail.id);
+                          setUpdateError(null);
+                          try {
+                            const res = await updateAdminOrder(
+                              detail.id,
+                              { payment_status: next },
+                              token,
+                            );
+                            setDetail({ ...detail, payment_status: res.data.payment_status });
+                            setOrders((cur) =>
+                              cur.map((o) =>
+                                o.id === detail.id
+                                  ? { ...o, payment_status: res.data.payment_status }
+                                  : o,
+                              ),
+                            );
+                          } catch (err) {
+                            setUpdateError(
+                              err instanceof Error ? err.message : "Failed to update payment status.",
+                            );
+                          } finally {
+                            setUpdatingId(null);
+                          }
+                        }}
+                        className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900"
+                      >
+                        {(["pending", "paid", "failed"] as PaymentStatus[]).map((s) => (
+                          <option key={s} value={s}>
+                            {PAYMENT_STATUS_LABELS[s]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <p className="mt-1 text-xs text-neutral-500">
+                      COD/WhatsApp stay pending until you confirm payment here.
                     </p>
                     <p className="text-sm">
                       <span className="text-neutral-500">Order status:</span> {STATUS_LABELS[detail.status]}

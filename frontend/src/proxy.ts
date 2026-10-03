@@ -2,17 +2,15 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 /**
- * Proxy — server-side gate for the admin area (Next 16: middleware was
+ * Proxy — UX gate for the admin area (Next 16: middleware was
  * renamed to proxy.ts).
  *
- * The admin session lives in localStorage (needed for the Bearer header on
- * API calls), which the server can't read, so login ALSO writes a dedicated
- * `lb_admin_session` cookie (see src/lib/admin.ts). This proxy checks that
- * cookie before any /admin/* page renders and redirects to /admin/login when
- * it's missing — a direct navigation to /admin/orders never flashes protected
- * content. It checks presence only (the actual JWT is verified by the API);
- * the protected shell's client guard covers cookie/localStorage desync and
- * expired tokens by clearing the session and redirecting.
+ * This cookie-presence check is NOT the security boundary: every
+ * /api/admin/* endpoint verifies the admin JWT server-side via
+ * AuthMiddleware('admin'), and the protected shell re-verifies it against
+ * GET /api/admin/auth/me on mount (clearing + redirecting on 401/404).
+ * The proxy only prevents a flash of protected UI on direct navigation;
+ * forging the cookie alone grants zero API access.
  *
  * /admin/login is deliberately public.
  */

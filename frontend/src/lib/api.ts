@@ -37,6 +37,10 @@ export async function api<T>(
 ): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
+    // credentials:include lets the HttpOnly refresh cookies (lb_customer_refresh
+    // / lb_admin_refresh) travel on same-site API calls — the safer transport
+    // for the long-lived credential. Access JWTs stay as Bearer headers.
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),

@@ -112,9 +112,8 @@ export default function AccountView() {
   async function handleLogout() {
     setLoggingOut(true);
     try {
-      if (session?.refresh_token) {
-        await logoutCustomer(session.refresh_token);
-      }
+      // Cookie-preferred: legacy sessions still pass their stored token.
+      await logoutCustomer(session?.refresh_token);
     } catch {
       // Revocation is best-effort; the local session is still cleared.
     }

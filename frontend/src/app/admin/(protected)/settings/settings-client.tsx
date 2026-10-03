@@ -113,7 +113,7 @@ export default function SettingsClient() {
   }
 
   const inputClass =
-    "w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none";
+    "w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1";
   const labelClass = "mb-1.5 block text-sm font-medium text-neutral-700";
 
   return (
@@ -182,8 +182,9 @@ export default function SettingsClient() {
           <>
             <h2 className="text-lg font-medium">Store Information</h2>
             <div>
-              <label className={labelClass}>Store Name</label>
+              <label htmlFor="admin-store-name" className={labelClass}>Store Name</label>
               <input
+                id="admin-store-name"
                 type="text"
                 value={settings.store_name || ""}
                 onChange={(e) => updateSetting("store_name", e.target.value)}
@@ -191,8 +192,9 @@ export default function SettingsClient() {
               />
             </div>
             <div>
-              <label className={labelClass}>Store Email</label>
+              <label htmlFor="admin-store-email" className={labelClass}>Store Email</label>
               <input
+                id="admin-store-email"
                 type="email"
                 value={settings.store_email || ""}
                 onChange={(e) => updateSetting("store_email", e.target.value)}
@@ -200,8 +202,9 @@ export default function SettingsClient() {
               />
             </div>
             <div>
-              <label className={labelClass}>Store Phone</label>
+              <label htmlFor="admin-store-phone" className={labelClass}>Store Phone</label>
               <input
+                id="admin-store-phone"
                 type="text"
                 value={settings.store_phone || ""}
                 onChange={(e) => updateSetting("store_phone", e.target.value)}
@@ -209,8 +212,9 @@ export default function SettingsClient() {
               />
             </div>
             <div>
-              <label className={labelClass}>WhatsApp Number</label>
+              <label htmlFor="admin-whatsapp" className={labelClass}>WhatsApp Number</label>
               <input
+                id="admin-whatsapp"
                 type="text"
                 value={settings.whatsapp_number || ""}
                 onChange={(e) => updateSetting("whatsapp_number", e.target.value)}
@@ -219,8 +223,9 @@ export default function SettingsClient() {
               />
             </div>
             <div>
-              <label className={labelClass}>Store Address</label>
+              <label htmlFor="admin-store-address" className={labelClass}>Store Address</label>
               <textarea
+                id="admin-store-address"
                 rows={3}
                 value={settings.store_address || ""}
                 onChange={(e) => updateSetting("store_address", e.target.value)}

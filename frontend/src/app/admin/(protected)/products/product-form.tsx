@@ -638,7 +638,7 @@ export default function ProductForm({ productId }: ProductFormProps) {
   }
 
   const inputClass =
-    "w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none";
+    "w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1";
   const labelClass = "mb-1.5 block text-sm font-medium text-neutral-700";
 
   return (
@@ -752,7 +752,7 @@ export default function ProductForm({ productId }: ProductFormProps) {
             id="category_id"
             value={categoryId}
             onChange={(e) => setCategoryId(e.target.value)}
-            className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none"
+            className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1"
           >
             <option value="">No category</option>
             {categories.map((category) => (

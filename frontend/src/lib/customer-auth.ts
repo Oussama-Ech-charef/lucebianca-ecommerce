@@ -13,21 +13,13 @@ import type {
 /**
  * Customer auth + session layer (phase 13).
  *
- * A fully separate session from the admin panel (spec section 4: customers
- * and admins are distinct tables/roles): tokens live under their own
- * localStorage key (`lucebianca:customer:session:v1`) — never the admin key
- * (`lucebianca:admin:session:v1` / `lb_admin_session` cookie) nor the cart key
- * (`lucebianca:cart:v1`).
- *
- * Unlike the admin session there is deliberately NO cookie/proxy gate: the
- * storefront is public, and /account protection is a client-side redirect to
- * /login (an admin session must never grant access to customer endpoints, and
- * vice versa). Access calls use the short-lived JWT; account data is fetched
- * fresh on /account.
- *
- * The store is exposed via useSyncExternalStore + a module-level cache (the
- * same pattern as cart-context) so the header and /account re-render the
- * moment the session is saved or cleared.
+ * Session security: the long-lived refresh token is now ALSO issued as an
+ * HttpOnly/Secure/SameSite=Lax cookie (`lb_customer_refresh`, see
+ * api/src/Controllers/AuthController.php) — JS cannot read it, so XSS cannot
+ * steal it. New sessions persist ONLY the short-lived access JWT + profile
+ * in localStorage; refresh/logout prefer the cookie (body token is a
+ * backward-compat fallback for sessions created before the cookie flow).
+ * Access calls use the short-lived JWT; account data is fetched fresh.
  */
 
 const SESSION_KEY = "lucebianca:customer:session:v1";
@@ -65,11 +57,21 @@ export function googleLogin(idToken: string) {
   });
 }
 
-/** POST /api/auth/logout — revokes the refresh token (idempotent). */
-export function logoutCustomer(refreshToken: string) {
+/** POST /api/auth/logout — revokes the refresh token (idempotent, cookie-preferred). */
+export function logoutCustomer(refreshToken?: string) {
   return api<void>("/api/auth/logout", {
     method: "POST",
-    body: { refresh_token: refreshToken },
+    // Omit the body when no legacy token exists — the server falls back to
+    // the HttpOnly cookie. Sending an empty body would 422.
+    ...(refreshToken ? { body: { refresh_token: refreshToken } } : {}),
+  });
+}
+
+/** POST /api/auth/refresh — rotates via cookie when no legacy token is stored. */
+export function refreshCustomerSession(refreshToken?: string) {
+  return api<CustomerAuthPayload>("/api/auth/refresh", {
+    method: "POST",
+    ...(refreshToken ? { body: { refresh_token: refreshToken } } : { body: {} }),
   });
 }
 
@@ -96,6 +98,27 @@ export function resendCustomerVerification(email: string) {
   return api<{ message: string }>("/api/auth/resend-verification", {
     method: "POST",
     body: { email },
+  });
+}
+
+/**
+ * POST /api/auth/forgot-password — requests a one-time reset link.
+ * Anti-enumeration: identical message whether the email exists or not.
+ */
+export function requestPasswordReset(email: string) {
+  return api<{ message: string }>("/api/auth/forgot-password", {
+    method: "POST",
+    body: { email },
+  });
+}
+
+/**
+ * POST /api/auth/reset-password — completes a reset with the emailed token.
+ */
+export function resetCustomerPassword(token: string, password: string) {
+  return api<{ message: string }>("/api/auth/reset-password", {
+    method: "POST",
+    body: { token, password },
   });
 }
 
@@ -175,9 +198,17 @@ function commitSession(next: SessionSnapshot): void {
   }
 }
 
-/** Persists a fresh customer session — login/register/google. */
+/** Persists a fresh customer session — login/register/google.
+ * Only the short-lived access JWT + profile are stored; the refresh token
+ * lives in its HttpOnly cookie and is NEVER written to localStorage for new
+ * sessions (mitigates XSS theft). The type keeps refresh_token optional
+ * solely to read legacy sessions created before the cookie flow.
+ */
 export function saveCustomerSession(payload: CustomerAuthPayload): void {
-  commitSession(payload);
+  commitSession({
+    token: payload.token,
+    user: payload.user,
+  } as CustomerAuthPayload);
 }
 
 /** Clears the customer session — logout. */

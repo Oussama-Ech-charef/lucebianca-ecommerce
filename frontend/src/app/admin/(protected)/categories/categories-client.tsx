@@ -418,7 +418,7 @@ export default function CategoriesClient() {
   }
 
   const inputClass =
-    "w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none";
+    "w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1";
 
   return (
     <div className="p-6">
@@ -621,7 +621,7 @@ export default function CategoriesClient() {
               value={sizeName}
               onChange={(e) => setSizeName(e.target.value)}
               placeholder="New size (e.g., M)"
-              className="flex-1 rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none"
+              className="flex-1 rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1"
               maxLength={50}
             />
             <button
@@ -707,7 +707,7 @@ export default function CategoriesClient() {
               value={colorName}
               onChange={(e) => setColorName(e.target.value)}
               placeholder="New color (e.g., Black)"
-              className="flex-1 rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none"
+              className="flex-1 rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1"
               maxLength={50}
             />
             <button
