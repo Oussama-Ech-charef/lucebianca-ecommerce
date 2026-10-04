@@ -48,6 +48,7 @@ npx tsc --noEmit  # TypeScript check (strict)
 - **Payments:** COD/WhatsApp/card all create `payment_status=pending` (never auto-paid). Card orders redirect via auto-submitted HTML form POST to CMI, then poll `GET /api/payments/status/{id}` on `/payment/[id]`; failures show retry and restore stock server-side. CMI returns the customer browser to `/payment/{id}?token=...&pay=success|failure` (auto-poll on arrival); the server-to-server `POST /api/payments/callback` stays the authoritative state change and is never customer-facing.
 - **Totals:** `total = subtotal + shipping` computed server-side from `settings.shipping_cost` / `free_shipping_threshold`. Checkout/cart/confirmation/WhatsApp/admin/email render the same breakdown.
 - **Privacy:** guest orders use `?token=lookup_token` (or `X-Order-Token`); private pages carry `noindex` + robots.txt disallow.
+- **Errors:** route-level `src/app/error.tsx` + root `src/app/global-error.tsx` boundaries render a generic safe message with a support reference id; stack traces, tokens, raw API errors, and internal URLs never reach the UI (details only in development).
 - **Accessibility:** visible `focus-visible` rings everywhere, radiogroup star rating with arrow keys, dialogs with `role=dialog aria-modal` + focus trap + scroll lock.
 
 ## Deployment (Vercel)
