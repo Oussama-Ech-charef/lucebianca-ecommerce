@@ -2,6 +2,8 @@
 
 namespace App\Core;
 
+use App\Core\ErrorLogger;
+use App\Core\Request;
 use InvalidArgumentException;
 
 /**
@@ -65,6 +67,13 @@ final class Router
      */
     public function dispatch(Request $request): void
     {
+        // Front door: one correlation id per request. Stored in
+        // RequestContext so every response header (via Response) and every
+        // log line (via ErrorLogger::currentRequestId) shares it — including
+        // middleware early-exits and the bootstrap 500 handler. Refreshed on
+        // every call, so long-lived processes never leak ids across requests.
+        RequestContext::set('request_id', ErrorLogger::generateRequestId($request));
+
         foreach ($this->routes as $route) {
             if ($route['method'] !== $request->method()) {
                 continue;
@@ -92,7 +101,8 @@ final class Router
             return;
         }
 
-        Response::notFound();
+        $requestId = ErrorLogger::currentRequestId($request);
+        Response::notFound($requestId);
     }
 
     /**

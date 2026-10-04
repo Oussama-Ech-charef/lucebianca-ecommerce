@@ -17,11 +17,18 @@ final class Response
     /**
      * Sends a JSON response and terminates the script.
      *
-     * @param mixed $data   Payload returned to the client.
-     * @param int   $status HTTP status code.
+     * @param mixed $data       Payload returned to the client.
+     * @param int   $status     HTTP status code.
+     * @param string|null $requestId Optional correlation ID; when omitted the
+     *                        front-door id from RequestContext is used so
+     *                        EVERY response carries X-Request-Id.
      */
-    public static function json(mixed $data, int $status = 200): never
+    public static function json(mixed $data, int $status = 200, ?string $requestId = null): never
     {
+        $requestId ??= self::contextRequestId();
+        if ($requestId !== null) {
+            header('X-Request-Id: ' . $requestId);
+        }
         http_response_code($status);
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -34,29 +41,46 @@ final class Response
      * @param string $message Human-readable error description.
      * @param int    $status  HTTP status code (4xx/5xx).
      * @param array  $extra   Optional additional fields (e.g. validation errors).
+     * @param string|null $requestId Optional correlation ID to include in response headers.
      */
-    public static function error(string $message, int $status = 400, array $extra = []): never
+    public static function error(string $message, int $status = 400, array $extra = [], ?string $requestId = null): never
     {
         $payload = array_merge(['error' => $message], $extra);
-        self::json($payload, $status);
+        self::json($payload, $status, $requestId);
     }
 
     /**
      * 404 — used by the router when no route matches.
      */
-    public static function notFound(): never
+    public static function notFound(?string $requestId = null): never
     {
-        self::error('Route not found', 404);
+        self::error('Route not found', 404, [], $requestId);
     }
 
     /**
      * 204 No Content — success with an intentionally empty body
      * (e.g. logout). No JSON is echoed.
      */
-    public static function noContent(): never
+    public static function noContent(?string $requestId = null): never
     {
+        $requestId ??= self::contextRequestId();
+        if ($requestId !== null) {
+            header('X-Request-Id: ' . $requestId);
+        }
         http_response_code(204);
         exit;
+    }
+
+    /**
+     * Front-door correlation id stored by Router::dispatch, if any.
+     * Lets every response carry X-Request-Id without threading $request
+     * through ~150 controller call sites.
+     */
+    private static function contextRequestId(): ?string
+    {
+        $id = RequestContext::get('request_id');
+
+        return is_string($id) && $id !== '' ? $id : null;
     }
 
     /**
