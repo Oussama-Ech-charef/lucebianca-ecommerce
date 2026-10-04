@@ -80,9 +80,12 @@ CORS checklist (all values live in `api/.env`):
   are built from them.
 - If Google Sign-In stays enabled, add the https origin in the Google
   Cloud console authorized-JavaScript-origins list.
-- Card payments are not implemented yet; when they land,
-  `CMI_CALLBACK_URL` must stay publicly reachable over HTTPS without
-  auth/CSRF (gateway-to-server), which the current route already does.
+- Card payments are implemented: `CMI_CALLBACK_URL` is the server-to-server
+  endpoint (`POST /api/payments/callback`, no auth/CSRF by design — CMI
+  signs with HMAC) and must stay publicly reachable over HTTPS. It must
+  NEVER be customer-facing: `CMI_RETURN_URL` (frontend `/payment` base,
+  defaults to `SITE_URL/payment`) is where CMI redirects customer browsers
+  (`/payment/{id}?token=...&pay=success|failure`, see `PaymentService`).
 
 ## 4. Verification checklist
 
