@@ -104,3 +104,17 @@ No `mysql`/`mysqldump` executed here; for DB upgrades see `database/migrations/R
 - `lucebianca-project-full.md:1` is **spec** (remains `14` tables, `only list/read`, generic SEO placeholders) — implementation intentionally diverges for security (`lookup_token`, `fail-closed JWT`, `4xx` mapping) and is documented above; spec file itself not mutated per task (read-only).
 
 **Lint:** `php -l` (70+ files excl. `vendor/storage`) `PHP LINT DONE` (0 failures); `frontend: npm run lint` `0 errors, 1 warning` (`checkout-form.tsx:203` `set-state-in-effect`, `eslint-disable` unused — pre-existing, design preserved); `npx tsc --noEmit --skipLibCheck` `0` errors.
+
+## 10) Addendum — changes since 2026-09-24 (2026-10-04; §§1–9 above preserved as written)
+
+Verified against the current implementation (code is the source of truth):
+
+- **Migrations/schema:** 19 tables in `schema.sql`, `001`→`020` (`016` shipping breakdown, `017` password reset, `018` newsletter audit, `019` `schema_migrations` tracking, `020` `orders.inventory_released_at`). `api/scripts/migrate.php` + `MigrationRunner` split/tokenize SQL (no naive `explode`), run in autocommit, record-only-on-success, read-only `--dry-run`, `--baseline` adoption; `010` still fails loudly on fresh replay by design (use the snapshot).
+- **Shipping:** §3 "not charged" no longer holds — `OrderService::calculateShippingCents` charges server-side from `shipping_cost`/`free_shipping_threshold` (`total = subtotal + shipping`); `/shipping` page still shows static `SHIPPING_FALLBACK` placeholders (owner action unchanged).
+- **Card payments:** `CMI_RETURN_URL` added — customer returns go to storefront `/payment/{id}?token=&pay=` (auto-polling), `CMI_CALLBACK_URL` stays the server-to-server endpoint; initiation hash covers the exact return URLs. `Node.js >=20.9.0` per `frontend/package.json` engines (§7 "Node 18+" superseded).
+- **Inventory/state:** `inventory_released_at` marker with conditional-claim release (exactly once); paid orders never auto-cancel (409 refund-first, checked pre-lock and under `FOR UPDATE`); admin `PUT /api/admin/orders/{id}` runs in `OrderService::adminUpdate()` (single transaction: cancelled+paid combo and cancelled→paid rejected with 409, admin failed-marking releases like the callback path).
+- **Newsletter:** subscribe returns message only (signed link delivered by welcome email, best-effort); `GET /api/newsletter/unsubscribe` is read-only link validation, POST performs the signed unsubscribe.
+- **Rate limiting:** file buckets now read-modify-write under `flock` (fail-closed on I/O errors); format unchanged (JSON timestamp arrays).
+- **Expiry cron:** per-order isolation kept; any failure now exits non-zero with an order-id-only stderr line (no customer data/secrets) for cron/monitoring; skips stay exit 0.
+
+Still owner/operator actions (code cannot do these): production `.env`/Vercel env values, `CMI_*` credentials, measured size chart, legal copy review, `JWT_SECRET` rotation, DB backup/restore + migration runs, cron installation and alerting.

@@ -33,7 +33,7 @@ Every placeholder now has a `TODO (launch)` in `config.ts` — one place for the
 ## 3) Safe failures (no invented data)
 
 - **Site/API URLs:** fallback stays `http://localhost:3000` / `http://127.0.0.1:8090` so `next dev` still renders if env missing. In production (`NODE_ENV=production` server), `warnIfPlaceholderConfig()` logs `Launch config placeholders active` (never throws, never invents `lucebianca.co`).
-- **WhatsApp/social/shipping/sizes:** fallback constants remain placeholders; runtime consumers prefer live `GET /api/settings/public` (`whatsapp_number`, `shipping_cost`, etc.) when admin configures them, otherwise show the fallback **with an explicit disclosure** (e.g., `shipping/page.tsx` still shows “Reasonable placeholders” note via `config.ts` comment, not hidden).
+- **WhatsApp/social/shipping/sizes:** fallback constants remain placeholders; display consumers prefer live `GET /api/settings/public` (`whatsapp_number`, etc.) when admin configures them, otherwise show the fallback **with an explicit disclosure** (e.g., `shipping/page.tsx` still shows the placeholders note via `config.ts` comment, not hidden). Order totals are a separate, server-side matter: `OrderService` charges shipping authoritatively from settings since `016` regardless of what the page displays.
 - **Legal/about:** draft copy renders as-is (visual design preserved); `TODO` comments stay so owner/legal review is not bypassed.
 - **Image/SEO:** `metadata.title/description` fallback is generic “Casual Luxury Tees” (not branded beyond spec); `OG_IMAGE` is logo (safe).
 - **Admin cookie:** `Secure` is added only on `https:` to keep `http://localhost` dev working; `HttpOnly` is documented as requiring PHP `Set-Cookie` (see launch checklist) — JS fallback stays `SameSite=Lax`.
@@ -59,20 +59,21 @@ Validation:
 **Admin settings (`/admin/settings` → `PUT /api/admin/settings`, 14-key whitelist):**
 - [ ] Store Info `store_name`, `store_email`, `store_phone`, `store_address` — replace placeholders; validate `store_email` and phone.
 - [ ] WhatsApp `whatsapp_number` (e.g. `212612345678`) — verified by `SettingsController` `whatsapp_number`; public `GET /api/settings/public` `whatsapp_number` then drives `whatsapp-button` + checkout WhatsApp link.
-- [ ] Shipping `shipping_cost` (e.g. `30.00`) and `free_shipping_threshold` (e.g. `500.00`) — validated `0-99999`, `threshold ≥ cost`; `shipping/page.tsx` will read `GET /api/settings/public` once wired (currently shows `SHIPPING_FALLBACK` placeholders).
+- [ ] Shipping `shipping_cost` (e.g. `30.00`) and `free_shipping_threshold` (e.g. `500.00`) — validated `0-99999`, `threshold ≥ cost`; `shipping/page.tsx` will read `GET /api/settings/public` once wired (currently shows `SHIPPING_FALLBACK` placeholders; order totals are already charged server-side from these settings since `016`, the page table itself is still static).
 - [ ] Payments `payment_cod_enabled`, `payment_whatsapp_enabled`, `payment_card_enabled` (`0`/`1`) — `OrderService` + `checkout-form` already read `GET /api/settings/public` `payment_*_enabled`.
 - [ ] Notifications `notify_*` (`0`/`1`) — `NotificationService` + `OrderService` already gated.
 
 **Placeholders to replace (owner + legal):**
 - [ ] `SOCIAL_LINKS` in `lib/config.ts:18` (`#` → real Instagram/Facebook/X `https://…`) — `footer.tsx` consumes.
 - [ ] `SIZE_CHART_FALLBACK` in `lib/config.ts:36` (measure real garment flat `chest/length/shoulder/sleeve` cm) — `size-guide/page.tsx` consumes.
-- [ ] `SHIPPING_FALLBACK` / `FREE_SHIPPING_THRESHOLD_FALLBACK` in `lib/config.ts:31` if Regions/costs/times change before settings wiring.
+- [ ] `SHIPPING_FALLBACK` / `FREE_SHIPPING_THRESHOLD_FALLBACK` in `lib/config.ts:31` if Regions/costs/times change; wire `shipping/page.tsx` to live settings or replace the static table (totals already come from settings server-side).
 - [ ] `about/page.tsx:6`, `returns/page.tsx:7`, `terms/page.tsx:7`, `privacy/page.tsx:7`, `shipping/page.tsx:4`, `size-guide/page.tsx:4` — owner/legal review (Moroccan consumer law for returns/privacy/terms; see file headers).
 - [ ] `OG_IMAGE_FALLBACK` in `lib/config.ts:47` if logo changes; `layout.tsx:20` SEO `title/description` if `seo_title`/`seo_description` settings are added later (currently generic, documented as deferred).
 
 **Admin cookie (production):**
 - [ ] Switch `lb_admin_session` to `HttpOnly` + `Secure` + `SameSite=Lax` issued via PHP `Set-Cookie` header (JS `document.cookie` cannot set `HttpOnly`). Current `admin.ts:60` adds `Secure` on `https:` but stays `SameSite=Lax` JS cookie — acceptable for dev/staging, but prod should set `HttpOnly` server-side. Verify `proxy.ts:31` still gates `/admin/*` via `request.cookies`.
 - [ ] Rotate `JWT_SECRET` in `api/.env` on launch; set `APP_ENV=production`, `APP_DEBUG=false`.
+- [ ] `api/.env` additions since this note was written: `CMI_RETURN_URL` (storefront `/payment` base for card returns; falls back to `SITE_URL/payment`), `TRUSTED_PROXIES` (reverse-proxy IPs/CIDRs, empty = never trust `X-Forwarded-For`), writable `RATE_LIMIT_STORAGE_DIR`, and the card-expiry cron (`expire-card-pending.php` every 15 min, alerts on non-zero exit).
 
 **Verify after deploy (read-only):**
 - [ ] `curl -s https://lucebianca.co/api/settings/public | jq .data.whatsapp_number` → real number, not fallback.
