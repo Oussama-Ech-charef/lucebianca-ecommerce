@@ -49,12 +49,21 @@ final class Database
             $name
         );
 
-        self::$connection = new PDO($dsn, $user, $pass, [
-            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::ATTR_EMULATE_PREPARES   => false,
-            PDO::ATTR_STRINGIFY_FETCHES  => false,
-        ]);
+        try {
+            self::$connection = new PDO($dsn, $user, $pass, [
+                PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES   => false,
+                PDO::ATTR_STRINGIFY_FETCHES  => false,
+            ]);
+        } catch (PDOException $e) {
+            // Database failure (unreachable / access denied). Logged with a
+            // sanitized message only — never credentials, host or DSN.
+            ErrorLogger::logEvent('warning', 'Database connection failure', null, [
+                'exception' => $e::class,
+            ]);
+            throw $e;
+        }
 
         return self::$connection;
     }

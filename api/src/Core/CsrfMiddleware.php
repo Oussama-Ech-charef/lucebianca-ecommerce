@@ -30,7 +30,8 @@ final class CsrfMiddleware implements Middleware
         $token = CsrfProtection::getTokenFromRequest($request);
 
         if (!CsrfProtection::validateToken($token)) {
-            Response::error('Invalid or expired CSRF token.', 403);
+            $requestId = ErrorLogger::currentRequestId($request);
+            Response::error('Invalid or expired CSRF token.', 403, [], $requestId);
         }
     }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use App\Core\ErrorLogger;
 use App\Core\Request;
 use App\Core\Validator;
 use App\Repositories\NewsletterRepository;
@@ -54,7 +55,8 @@ final class NewsletterController extends Controller
                 $emailService = new \App\Services\EmailService();
                 $emailService->sendNewsletterWelcome($email, $this->unsubscribeUrl($email));
             } catch (\Throwable $e) {
-                error_log('Luce Bianca: newsletter welcome email not sent: ' . $e->getMessage());
+                // Recipient address is PII — never logged. Static reason only.
+                ErrorLogger::logEvent('warning', 'Newsletter welcome email delivery failed', $request);
             }
         }
 

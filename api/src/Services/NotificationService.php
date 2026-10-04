@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Core\Env;
+use App\Core\ErrorLogger;
 
 /**
  * NotificationService — admin notification handling.
@@ -78,11 +79,9 @@ final class NotificationService
         try {
             $this->email->sendAdminNotification($adminEmail, $subject, $message);
         } catch (\RuntimeException $e) {
-            error_log(sprintf(
-                '[Notification] Failed to send new order notification for order #%d: %s',
-                $orderId,
-                $e->getMessage()
-            ));
+            ErrorLogger::logEvent('warning', 'Admin new-order notification delivery failed', null, [
+                'order_id' => $orderId,
+            ]);
         }
     }
 
@@ -115,11 +114,9 @@ final class NotificationService
         try {
             $this->email->sendAdminNotification($adminEmail, $subject, $message);
         } catch (\RuntimeException $e) {
-            error_log(sprintf(
-                '[Notification] Failed to send low stock alert for %s: %s',
-                $productName,
-                $e->getMessage()
-            ));
+            ErrorLogger::logEvent('warning', 'Admin low-stock notification delivery failed', null, [
+                'product' => $productName,
+            ]);
         }
     }
 

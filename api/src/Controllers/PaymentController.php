@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use App\Core\Auth;
+use App\Core\ErrorLogger;
 use App\Core\Request;
 use App\Core\ValidationException;
 use App\Services\OrderService;
@@ -108,8 +109,16 @@ final class PaymentController extends Controller
                 null // return-URL base comes from CMI_RETURN_URL (see PaymentService)
             );
         } catch (\RuntimeException $e) {
+            // Gateway misconfigured in production — needs operator action.
+            ErrorLogger::logEvent('warning', 'Payment initiation failed: gateway not configured', $request, [
+                'order_id' => $orderIdInt,
+            ]);
             $this->error('Payment gateway is not configured. Please contact support.', 503);
         }
+
+        ErrorLogger::logEvent('info', 'Payment initiated', $request, [
+            'order_id' => $orderIdInt,
+        ]);
 
         $this->json([
             'data' => $paymentData,
@@ -154,11 +163,14 @@ final class PaymentController extends Controller
         try {
             $gateway = new PaymentService();
         } catch (\RuntimeException) {
+            ErrorLogger::logEvent('warning', 'Payment callback failed: gateway not configured', $request);
             $this->error('Payment gateway is not configured.', 503);
         }
         $result = $gateway->verifyCallback($callbackData);
 
         if (!$result['valid']) {
+            // Never log $callbackData — gateway fields may carry card data.
+            ErrorLogger::logEvent('warning', 'Payment callback rejected: invalid signature or payload', $request);
             $this->error($result['message'] ?? 'Invalid payment callback.', 400);
         }
 
@@ -219,15 +231,20 @@ final class PaymentController extends Controller
             $this->error('Order not found.', 404);
         }
 
-        // Log successful payment for admin records
-        if ($result['status'] === 'paid') {
-            error_log(sprintf(
-                '[Payment] Order #%d paid successfully. Transaction: %s, Amount: %s MAD',
-                $result['order_id'],
-                $result['transaction_id'] ?? 'N/A',
-                $result['amount'] ?? 'N/A'
-            ));
-        }
+        // Payment outcome as one structured JSON line (order id, status,
+        // transaction reference and amount only — never card data). This
+        // replaces ad-hoc error_log lines so callbacks are greppable next
+        // to every other API event in api/storage/logs/app-error.log.
+        ErrorLogger::logEvent(
+            $result['status'] === 'paid' ? 'info' : 'warning',
+            sprintf('Payment callback %s', $result['status']),
+            $request,
+            [
+                'order_id' => $result['order_id'],
+                'transaction_id' => $result['transaction_id'] ?? null,
+                'amount' => $result['amount'] ?? null,
+            ]
+        );
 
         // Return success response to CMI
         $this->json([

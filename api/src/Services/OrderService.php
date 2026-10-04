@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Core\ConflictException;
 use App\Core\Database;
+use App\Core\ErrorLogger;
 use App\Core\ValidationException;
 use App\Core\Validator;
 use App\Models\Order;
@@ -776,6 +777,11 @@ final class OrderService
             throw new ConflictException('Only pending or processing orders can be cancelled.');
         }
         if ($existing->paymentStatus === 'paid') {
+            // Money has changed hands — log the blocked attempt (order id
+            // only, never customer data) for refund follow-up.
+            ErrorLogger::logEvent('warning', 'Paid order cancellation blocked: refund required', null, [
+                'order_id' => $orderId,
+            ]);
             throw new ConflictException('Paid orders cannot be cancelled automatically. Process a refund before cancelling.');
         }
 
@@ -805,6 +811,9 @@ final class OrderService
             // restored on this path.
             if ($locked->paymentStatus === 'paid') {
                 $pdo->rollBack();
+                ErrorLogger::logEvent('warning', 'Paid order cancellation blocked under lock: refund required', null, [
+                    'order_id' => $orderId,
+                ]);
                 throw new ConflictException('Paid orders cannot be cancelled automatically. Process a refund before cancelling.');
             }
 
@@ -959,10 +968,18 @@ final class OrderService
             }
             if ($locked->inventoryReleasedAt !== null) {
                 $pdo->rollBack();
+                // Late paid callback after failure/cancel/expiry — money may
+                // need reconciliation; log the order id for follow-up.
+                ErrorLogger::logEvent('warning', 'Late paid callback rejected: stock already released', null, [
+                    'order_id' => $orderId,
+                ]);
                 throw new ConflictException('Payment cannot complete: the order was already failed or cancelled and its stock was released.');
             }
             if ($locked->status === 'cancelled') {
                 $pdo->rollBack();
+                ErrorLogger::logEvent('warning', 'Late paid callback rejected: order cancelled', null, [
+                    'order_id' => $orderId,
+                ]);
                 throw new ConflictException('Payment cannot complete a cancelled order.');
             }
 
@@ -1185,12 +1202,11 @@ final class OrderService
         try {
             $this->email->sendOrderConfirmation($email, $customerName, $order->toArray());
         } catch (\RuntimeException $e) {
-            // Log failure but don't throw — order placement already succeeded
-            error_log(sprintf(
-                '[Email] Failed to send order confirmation for order #%d: %s',
-                $order->id,
-                $e->getMessage()
-            ));
+            // Log failure but don't throw — order placement already succeeded.
+            // Only the order id is logged, never the recipient address.
+            ErrorLogger::logEvent('warning', 'Order confirmation email delivery failed', null, [
+                'order_id' => $order->id,
+            ]);
         }
     }
 
@@ -1222,11 +1238,9 @@ final class OrderService
         try {
             $this->email->sendShippingStatusUpdate($email, $customerName, $order->toArray());
         } catch (\RuntimeException $e) {
-            error_log(sprintf(
-                '[Email] Failed to send shipping status for order #%d: %s',
-                $order->id,
-                $e->getMessage()
-            ));
+            ErrorLogger::logEvent('warning', 'Shipping status email delivery failed', null, [
+                'order_id' => $order->id,
+            ]);
         }
     }
 }

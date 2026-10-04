@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Core\Auth;
 use App\Core\ConflictException;
 use App\Core\Env;
+use App\Core\ErrorLogger;
 use App\Core\InvalidCredentialsException;
 use App\Core\ValidationException;
 use App\Core\Validator;
@@ -101,7 +102,7 @@ final class AuthService
                 $this->sendVerificationEmail($user);
             }
         } catch (\Throwable $e) {
-            error_log('Luce Bianca: verification email not sent: ' . $e->getMessage());
+            ErrorLogger::logEvent('warning', 'Verification email delivery failed during registration');
         }
 
         return $this->issueTokenPair($userId);
@@ -263,7 +264,7 @@ final class AuthService
                 $this->sendVerificationEmail($user);
             }
         } catch (\Throwable $e) {
-            error_log('Luce Bianca: verification email not sent: ' . $e->getMessage());
+            ErrorLogger::logEvent('warning', 'Verification email delivery failed on resend');
         }
     }
 
@@ -461,7 +462,7 @@ final class AuthService
         try {
             $this->email->sendPasswordResetEmail($user->email, $user->name, $link);
         } catch (\Throwable $e) {
-            error_log('Luce Bianca: password-reset email not sent: ' . $e->getMessage());
+            ErrorLogger::logEvent('warning', 'Password-reset email delivery failed');
         }
     }
 

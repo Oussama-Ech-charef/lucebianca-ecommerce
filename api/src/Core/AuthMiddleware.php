@@ -29,17 +29,30 @@ final class AuthMiddleware implements Middleware
     {
         $token = $request->bearerToken();
         if ($token === null) {
-            Response::error('Authentication required.', 401);
+            ErrorLogger::logEvent('warning', 'Authentication failure: missing bearer token', $request, [
+                'required_role' => $this->role,
+            ]);
+            $requestId = ErrorLogger::currentRequestId($request);
+            Response::error('Authentication required.', 401, [], $requestId);
         }
 
         try {
             $claims = Auth::verify($token);
         } catch (RuntimeException) {
-            Response::error('Invalid or expired token.', 401);
+            // Never log the token itself — only that verification failed.
+            ErrorLogger::logEvent('warning', 'Authentication failure: invalid or expired token', $request, [
+                'required_role' => $this->role,
+            ]);
+            $requestId = ErrorLogger::currentRequestId($request);
+            Response::error('Invalid or expired token.', 401, [], $requestId);
         }
 
         if ($this->role !== null && ($claims['role'] ?? '') !== $this->role) {
-            Response::error('Insufficient permissions.', 403);
+            ErrorLogger::logEvent('warning', 'Authorization failure: insufficient role', $request, [
+                'required_role' => $this->role,
+            ]);
+            $requestId = ErrorLogger::currentRequestId($request);
+            Response::error('Insufficient permissions.', 403, [], $requestId);
         }
 
         RequestContext::set('auth', $claims);

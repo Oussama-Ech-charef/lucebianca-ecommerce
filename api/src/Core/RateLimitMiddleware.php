@@ -39,10 +39,17 @@ final class RateLimitMiddleware implements Middleware
             // Set Retry-After header before sending response
             header('Retry-After: ' . $retryAfter);
 
+            // Client IPs are never logged (PII) — limiter key is enough to
+            // identify which endpoint budget was exhausted.
+            ErrorLogger::logEvent('warning', 'Rate limit exceeded', $request, [
+                'retry_after' => $retryAfter,
+            ]);
+
+            $requestId = ErrorLogger::currentRequestId($request);
             Response::json([
                 'error' => 'Too many requests. Please try again later.',
                 'retry_after' => $retryAfter,
-            ], 429);
+            ], 429, $requestId);
         }
     }
 

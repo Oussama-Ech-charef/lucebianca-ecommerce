@@ -28,6 +28,7 @@ require __DIR__ . '/../src/autoload.php';
 
 use App\Core\Database;
 use App\Core\Env;
+use App\Core\ErrorLogger;
 
 // Test harness support: run-api-tests.php points this script at the isolated
 // test database via LB_TEST_ENV_FILE (same mechanism as server-index.php).
@@ -52,6 +53,7 @@ try {
 } catch (Throwable $e) {
     // Cron/monitoring sees a non-zero exit and a one-line reason — never a
     // stack trace, DSN, or credentials.
+    ErrorLogger::logEvent('warning', 'Card-expiry cron failure: database unavailable');
     fwrite(STDERR, "expire-card-pending: database unavailable ({$e->getMessage()})\n");
     exit(1);
 }
@@ -73,6 +75,7 @@ try {
     $stmt->execute();
     $ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
 } catch (Throwable $e) {
+    ErrorLogger::logEvent('warning', 'Card-expiry cron failure: candidate lookup failed');
     fwrite(STDERR, "expire-card-pending: candidate lookup failed ({$e->getMessage()})\n");
     exit(1);
 }
@@ -102,6 +105,7 @@ foreach ($ids as $id) {
         // reach cron/monitoring: only order ids are printed, never customer
         // data or secrets.
         $failed++;
+        ErrorLogger::logEvent('warning', "Card-expiry cron failure for order #{$id}");
         fwrite(STDERR, "Failed to expire order #{$id}: {$e->getMessage()}\n");
     }
 }
