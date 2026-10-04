@@ -389,6 +389,99 @@ foreach ($weakSecrets as $i => $weak) {
     $prop->setValue(null, $saved);
 }
 
+// --- 13. RateLimiter file locking ------------------------------------------
+{
+    $refEnv = new ReflectionClass(App\Core\Env::class);
+    $propEnv = $refEnv->getProperty('values');
+    $savedEnv = $propEnv->getValue();
+    $rateDir = sys_get_temp_dir() . '/lb-rate-test-' . getmypid();
+    @mkdir($rateDir, 0777, true);
+    $propEnv->setValue(null, array_merge($savedEnv, ['RATE_LIMIT_STORAGE_DIR' => $rateDir]));
+
+    // Sequential behavior unchanged: allow up to max, then deny.
+    $limiter = new App\Core\RateLimiter('unit-seq', 3, 60);
+    check($limiter->attempt('ip-a') === true, 'RateLimit: attempt 1 allowed');
+    check($limiter->attempt('ip-a') === true, 'RateLimit: attempt 2 allowed');
+    check($limiter->attempt('ip-a') === true, 'RateLimit: attempt 3 allowed');
+    check($limiter->attempt('ip-a') === false, 'RateLimit: attempt 4 denied');
+    check($limiter->attempt('ip-a') === false, 'RateLimit: attempt 5 denied');
+    check($limiter->getRetryAfter('ip-a') > 0, 'RateLimit: retry-after positive while limited');
+    check($limiter->attempt('ip-b') === true, 'RateLimit: identifiers isolated');
+    $limiter->clear('ip-a');
+    check($limiter->attempt('ip-a') === true, 'RateLimit: clear resets bucket');
+    check($limiter->getRetryAfter('ip-a') === 0, 'RateLimit: retry-after zero when under limit');
+    // Storage format unchanged: one JSON array of timestamps per bucket.
+    $bucketFiles = glob($rateDir . '/*.json') ?: [];
+    check(count($bucketFiles) >= 1, 'RateLimit: bucket files written');
+    $decoded = json_decode((string) file_get_contents($rateDir . '/' . hash('sha256', 'unit-seq:ip-b') . '.json'), true);
+    check(is_array($decoded) && count($decoded) === 1 && is_int($decoded[0]), 'RateLimit: bucket holds JSON timestamp array');
+
+    // Window pruning still works.
+    $short = new App\Core\RateLimiter('unit-short', 1, 1);
+    check($short->attempt('ip-c') === true, 'RateLimit: short-window attempt allowed');
+    check($short->attempt('ip-c') === false, 'RateLimit: short-window repeat denied');
+    sleep(2);
+    check($short->attempt('ip-c') === true, 'RateLimit: expired entries pruned after window');
+
+    // Fail-closed: an unwritable store denies instead of disabling the limit.
+    $blockFile = tempnam(sys_get_temp_dir(), 'lb-rate-block-');
+    $propEnv->setValue(null, array_merge($savedEnv, ['RATE_LIMIT_STORAGE_DIR' => $blockFile . '/sub']));
+    set_error_handler(static fn() => true);
+    $broken = new App\Core\RateLimiter('unit-broken', 3, 60);
+    restore_error_handler();
+    check($broken->attempt('anyone') === false, 'RateLimit: I/O failure fails closed (limit never silently disabled)');
+    @unlink($blockFile);
+
+    // Concurrent processes: 12 workers released at once must allow exactly
+    // maxAttempts (5). Without locking, interleaved read-modify-write cycles
+    // lose updates and over-allow. Workers run as separate processes
+    // (portable: no pcntl needed) gated on a flag file for real overlap.
+    $propEnv->setValue(null, array_merge($savedEnv, ['RATE_LIMIT_STORAGE_DIR' => $rateDir]));
+    $flag = $rateDir . '/start.flag';
+    @unlink($flag);
+    $childEnv = tempnam(sys_get_temp_dir(), 'lb-rate-child-env-');
+    file_put_contents((string) $childEnv, "RATE_LIMIT_STORAGE_DIR={$rateDir}\n");
+    $childCode = '$f=' . var_export($flag, true) . '; $t=time()+10;'
+        . ' while(!file_exists($f)&&time()<$t){usleep(1000);} '
+        . 'require ' . var_export(__DIR__ . '/../src/autoload.php', true) . '; '
+        . 'App\\Core\\Env::load(' . var_export((string) $childEnv, true) . '); '
+        . '$l=new App\\Core\\RateLimiter(\'unit-concur\',5,60); echo (int)$l->attempt(\'victim\');';
+    $procs = [];
+    $outs = [];
+    for ($i = 0; $i < 12; $i++) {
+        $outFile = tempnam(sys_get_temp_dir(), 'lb-rate-out-');
+        $outs[] = $outFile;
+        $proc = proc_open(
+            [PHP_BINARY, '-r', $childCode],
+            [1 => ['file', (string) $outFile, 'w'], 2 => ['file', (string) $outFile, 'w']],
+            $pipes
+        );
+        if (is_resource($proc)) {
+            $procs[] = $proc;
+        }
+    }
+    sleep(1); // let every worker reach the gate before releasing it
+    file_put_contents($flag, 'go');
+    $allowed = 0;
+    foreach ($procs as $k => $proc) {
+        proc_close($proc);
+        $allowed += (int) trim((string) @file_get_contents($outs[$k]));
+        @unlink($outs[$k]);
+    }
+    check(count($procs) === 12, 'RateLimit: all 12 concurrent workers spawned');
+    check($allowed === 5, 'RateLimit: 12 concurrent processes allow exactly 5 (no lost updates)');
+    $concurBucket = json_decode((string) @file_get_contents($rateDir . '/' . hash('sha256', 'unit-concur:victim') . '.json'), true);
+    check(is_array($concurBucket) && count($concurBucket) === 5, 'RateLimit: bucket holds exactly 5 recorded attempts');
+
+    // Cleanup temp storage (the shared suite dir stays untouched).
+    foreach (glob($rateDir . '/*') ?: [] as $f) {
+        @unlink($f);
+    }
+    @rmdir($rateDir);
+    @unlink((string) $childEnv);
+    $propEnv->setValue(null, $savedEnv);
+}
+
 unlink((string) $envFile);
 
 // --- Summary -------------------------------------------------------------

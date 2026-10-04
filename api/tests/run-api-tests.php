@@ -1109,6 +1109,142 @@ check(
     'paid order keeps pending+paid with no release marker (cancelled+paid+restored impossible)'
 );
 
+// --- Admin order state transitions (atomic, service-enforced) --------------
+// Dedicated fixture product: fully decoupled from earlier suites' stock.
+[$status, , $transProduct] = httpRequest('POST', '/api/admin/products', [
+    'name' => 'Transition Tee',
+    'base_price' => '50.00',
+    'is_active' => 1,
+    'meta_title' => 'Transition Tee',
+    'meta_description' => 'State-transition fixture',
+    'variants' => [
+        ['size' => 'M', 'color' => 'Black', 'sku' => 'TRANSITION-M-BLK', 'price' => '', 'stock_quantity' => '10'],
+    ],
+], $adminToken + $csrfCH);
+$transVariantId = (int) ($transProduct['data']['variants'][0]['id'] ?? 0);
+check($status === 201 && $transVariantId > 0, 'transition fixture product created');
+$mkTransOrder = static function (string $email) use ($orderPayload, $transVariantId, $csrfCH): array {
+    [, , $o] = httpRequest('POST', '/api/orders', array_merge($orderPayload, [
+        'email' => $email,
+        'payment_method' => 'cod',
+        'items' => [['variant_id' => $transVariantId, 'quantity' => 1]],
+    ]), $csrfCH);
+    return $o['data'] ?? [];
+};
+$adminGetOrder = static function (int $id) use ($adminToken): array {
+    [, , $o] = httpRequest('GET', "/api/admin/orders/{$id}", null, $adminToken);
+    return $o['data'] ?? [];
+};
+check($stockOf($transVariantId, $csrfCH) === 10, 'transition fixture stock is 10');
+
+// A: cancelled + paid in one request -> 409, state and stock untouched.
+$combo = $mkTransOrder('combo@test.com');
+$comboId = (int) ($combo['id'] ?? 0);
+check($comboId > 0 && $stockOf($transVariantId, $csrfCH) === 9, 'transition fixture order reserves stock (10 - 1 = 9)');
+[$status, , $comboBody] = httpRequest('PUT', "/api/admin/orders/{$comboId}", ['status' => 'cancelled', 'payment_status' => 'paid'], $adminToken + $csrfCH);
+check($status === 409 && str_contains($comboBody['error'] ?? '', 'cannot be cancelled and marked paid'), 'cancelled+paid combo -> 409 conflict message');
+$comboFresh = $adminGetOrder($comboId);
+check(($comboFresh['status'] ?? '') === 'pending' && ($comboFresh['payment_status'] ?? '') === 'pending', 'rejected combo leaves order pending+pending');
+check($stockOf($transVariantId, $csrfCH) === 9, 'rejected combo restores no stock (still reserved)');
+
+// B: previously cancelled order can never be marked paid afterwards.
+[$status, , ] = httpRequest('PUT', "/api/admin/orders/{$comboId}", ['status' => 'cancelled'], $adminToken + $csrfCH);
+check($status === 200, 'transition fixture cancelled normally (unpaid)');
+check($stockOf($transVariantId, $csrfCH) === 10, 'cancel restores stock (9 + 1 = 10)');
+[$status, , $latePaidBody] = httpRequest('PUT', "/api/admin/orders/{$comboId}", ['payment_status' => 'paid'], $adminToken + $csrfCH);
+check($status === 409 && str_contains($latePaidBody['error'] ?? '', 'cancelled order cannot be marked paid'), 'paid on cancelled order -> 409');
+$comboFresh2 = $adminGetOrder($comboId);
+check(($comboFresh2['status'] ?? '') === 'cancelled' && ($comboFresh2['payment_status'] ?? '') === 'pending', 'cancelled order stays cancelled+pending after rejected paid-marking');
+check($stockOf($transVariantId, $csrfCH) === 10, 'no stock movement on rejected paid-marking');
+
+// C: cancelled + failed in one request still works (and restores exactly once).
+$comboF = $mkTransOrder('combofail@test.com');
+$comboFId = (int) ($comboF['id'] ?? 0);
+check($comboFId > 0 && $stockOf($transVariantId, $csrfCH) === 9, 'failed-combo fixture reserves stock');
+[$status, , $comboFBody] = httpRequest('PUT', "/api/admin/orders/{$comboFId}", ['status' => 'cancelled', 'payment_status' => 'failed'], $adminToken + $csrfCH);
+check($status === 200 && ($comboFBody['data']['status'] ?? '') === 'cancelled' && ($comboFBody['data']['payment_status'] ?? '') === 'failed', 'cancelled+failed combo -> 200 cancelled+failed');
+check($stockOf($transVariantId, $csrfCH) === 10, 'cancelled+failed restores stock exactly once');
+[$status, , ] = httpRequest('PUT', "/api/admin/orders/{$comboFId}", ['status' => 'cancelled', 'payment_status' => 'failed'], $adminToken + $csrfCH);
+check($status === 200 && $stockOf($transVariantId, $csrfCH) === 10, 'repeated cancelled+failed is a no-op (no double restore)');
+
+// D: admin marking pending payment failed releases the reservation (callback parity).
+$failM = $mkTransOrder('adminfail@test.com');
+$failMId = (int) ($failM['id'] ?? 0);
+check($failMId > 0 && $stockOf($transVariantId, $csrfCH) === 9, 'failed-mark fixture reserves stock');
+[$status, , $failMBody] = httpRequest('PUT', "/api/admin/orders/{$failMId}", ['payment_status' => 'failed'], $adminToken + $csrfCH);
+check($status === 200 && ($failMBody['data']['payment_status'] ?? '') === 'failed', 'admin pending->failed -> 200 failed');
+check($stockOf($transVariantId, $csrfCH) === 10, 'admin failed-marking releases stock (no dangling reservation)');
+[$status, , ] = httpRequest('PUT', "/api/admin/orders/{$failMId}", ['payment_status' => 'failed'], $adminToken + $csrfCH);
+check($status === 200 && $stockOf($transVariantId, $csrfCH) === 10, 'repeated failed-marking never double-restores');
+
+// E: legitimate payment confirmation still works — and retains the reservation.
+$confirm = $mkTransOrder('confirm@test.com');
+$confirmId = (int) ($confirm['id'] ?? 0);
+check($confirmId > 0 && $stockOf($transVariantId, $csrfCH) === 9, 'confirm fixture reserves stock');
+[$status, , $confirmBody] = httpRequest('PUT', "/api/admin/orders/{$confirmId}", ['payment_status' => 'paid'], $adminToken + $csrfCH);
+check($status === 200 && ($confirmBody['data']['payment_status'] ?? '') === 'paid', 'admin pending->paid confirmation -> 200 paid');
+check($stockOf($transVariantId, $csrfCH) === 9, 'paid confirmation restores no stock (reservation retained)');
+$confirmReleased = $pdo->query("SELECT inventory_released_at FROM orders WHERE id = {$confirmId}")->fetchColumn();
+check($confirmReleased === null || $confirmReleased === false, 'paid confirmation marks no inventory release');
+
+// --- Expiry script failure reporting ---------------------------------------
+$runExpireEnv = static function (?string $envOverride) use ($envFile, $repoRoot): array {
+    $cmd = [PHP_BINARY, $repoRoot . '/api/scripts/expire-card-pending.php', '--minutes=30'];
+    $proc = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $repoRoot, array_merge(getenv() ?: [], ['LB_TEST_ENV_FILE' => $envOverride ?? $envFile]));
+    if (!is_resource($proc)) {
+        return [1, '', 'proc_open failed'];
+    }
+    $out = stream_get_contents($pipes[1]);
+    $err = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    return [proc_close($proc), (string) $out, (string) $err];
+};
+
+// F: per-order failure -> exit 1 AFTER the rest, names only the order id.
+[$status, , $trig] = httpRequest('POST', '/api/orders', array_merge($orderPayload, ['email' => 'failtrigger@example.com', 'payment_method' => 'card', 'items' => [['variant_id' => $transVariantId, 'quantity' => 1]]]), $csrfCH);
+$trigId = (int) ($trig['data']['id'] ?? 0);
+check($status === 201 && $trigId > 0 && $stockOf($transVariantId, $csrfCH) === 8, 'failure-path fixture card order reserves stock (9 - 1 = 8)');
+$pdo->exec("UPDATE orders SET created_at = DATE_SUB(NOW(), INTERVAL 61 MINUTE) WHERE id = {$trigId}");
+// A trigger makes ONLY the stock-restore UPDATE throw, simulating a
+// mid-expiry database failure on one order.
+$pdo->exec("CREATE TRIGGER trg_test_fail_stock BEFORE UPDATE ON product_variants FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'test-trigger-failure'");
+try {
+    [$tCode, $tOut, $tErr] = $runExpireEnv(null);
+    check($tCode === 1, 'expiry exits 1 when an order expiration fails');
+    check(str_contains($tErr, "Failed to expire order #{$trigId}"), 'expiry reports the failed order id on stderr');
+    check(!str_contains($tOut . $tErr, 'failtrigger@example.com'), 'expiry failure output contains no customer email');
+    check(!str_contains($tOut . $tErr, '0612345678'), 'expiry failure output contains no customer phone');
+    check($stockOf($transVariantId, $csrfCH) === 8, 'failed expiry restores nothing (transaction rolled back)');
+    $trigRow = $adminGetOrder($trigId);
+    check(($trigRow['status'] ?? '') === 'pending' && ($trigRow['payment_status'] ?? '') === 'pending', 'failed expiry leaves order pending+pending (nothing half-applied)');
+} finally {
+    $pdo->exec('DROP TRIGGER IF EXISTS trg_test_fail_stock');
+}
+// Recovery: with the trigger gone the same order expires cleanly (exit 0).
+[$tCode2, $tOut2] = $runExpireEnv(null);
+check($tCode2 === 0 && str_contains($tOut2, "Expired 1/1"), 'expiry succeeds after the transient failure is gone');
+check($stockOf($transVariantId, $csrfCH) === 9, 'recovered expiry restores stock (8 + 1 = 9)');
+
+// G: unreachable database -> non-zero exit, clean message, no credentials.
+$badEnv = tempnam(sys_get_temp_dir(), 'lb-expire-badenv-');
+file_put_contents((string) $badEnv, "DB_HOST=127.0.0.1\nDB_PORT=3306\nDB_NAME={$dbName}\nDB_USER=root\nDB_PASS=lb-wrong-pass-9z\nJWT_SECRET=x\n");
+[$bCode, $bOut, $bErr] = $runExpireEnv((string) $badEnv);
+check($bCode !== 0, 'expiry exits non-zero when the database is unreachable');
+check(!str_contains($bOut . $bErr, 'lb-wrong-pass-9z'), 'failure output never prints credentials');
+@unlink((string) $badEnv);
+
+// H: schema without orders table -> non-zero exit via the guarded lookup.
+$emptyDb = $dbName . '_noorders';
+$adminPdo->exec("DROP DATABASE IF EXISTS `{$emptyDb}`");
+$adminPdo->exec("CREATE DATABASE `{$emptyDb}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+$emptyEnv = tempnam(sys_get_temp_dir(), 'lb-expire-emptyenv-');
+file_put_contents((string) $emptyEnv, str_replace("DB_NAME={$dbName}", "DB_NAME={$emptyDb}", (string) file_get_contents((string) $envFile)));
+[$eCode, , $eErr] = $runExpireEnv((string) $emptyEnv);
+check($eCode !== 0 && str_contains($eErr, 'candidate lookup failed'), 'expiry exits non-zero when the schema is missing');
+$adminPdo->exec("DROP DATABASE IF EXISTS `{$emptyDb}`");
+@unlink((string) $emptyEnv);
+
 // --- MigrationRunner against scratch test databases ------------------------
 // Uses isolated lucebianca_test_migrate_* databases (same namespace guard as
 // the main suite) plus temp fixture dirs — the real test DB is untouched.
