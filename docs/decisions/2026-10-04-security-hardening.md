@@ -24,6 +24,9 @@
   unverified). Login/checkout stay unblocked (informational); Google accounts
   are verified at creation. Policy documented in code + `/account` banner.
 - **Newsletter:** unsubscribe requires a signed HMAC token (email-bound,
-  1 y TTL, fail-closed without secret) via `POST` or `GET
-  /api/newsletter/unsubscribe?email=&token=` + `/newsletter/unsubscribe` page.
-  Email alone (422/403) is insufficient. Subscribe returns the token + URL.
+  1 y TTL, fail-closed without secret). The token travels by welcome email
+  (best-effort `sendNewsletterWelcome`, never blocks the subscribe) and is
+  NOT returned in the subscribe response; `GET /api/newsletter/unsubscribe`
+  only validates the link (read-only, scanner-safe), the state change is
+  `POST`-only from the confirmation click, with an `unsubscribe_count`
+  audit. Email alone (422/403) is insufficient.

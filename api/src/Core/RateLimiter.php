@@ -9,6 +9,14 @@ namespace App\Core;
  * file-based storage (storage/rate-limits/) for simplicity; Redis would be
  * a drop-in replacement for high-traffic scenarios.
  *
+ * Concurrency: every read-modify-write cycle runs under an exclusive
+ * advisory lock (`flock(LOCK_EX)`) on the bucket file, so concurrent
+ * requests cannot interleave reads and overwrite one another's updates
+ * (lost updates would silently let more than maxAttempts through). Lock or
+ * I/O failures fail CLOSED (the attempt is denied) rather than silently
+ * disabling the limit. Storage format (JSON array of timestamps) is
+ * unchanged.
+ *
  * Usage:
  *   $limiter = new RateLimiter('login', 5, 300); // 5 attempts per 5 minutes
  *   if (!$limiter->attempt($ip)) {
@@ -48,71 +56,110 @@ final class RateLimiter
     /**
      * Attempt to record a request. Returns false if rate limit exceeded.
      *
+     * Atomic across read, prune, check, and write: the bucket file is held
+     * under LOCK_EX for the whole cycle. Returns false (denied) on any
+     * lock or I/O failure so a broken store can never silently disable the
+     * limit. Denied attempts are not recorded, so Retry-After still points
+     * at the oldest recorded attempt's expiry.
+     *
      * @param string $identifier Usually the client IP address
      * @return bool True if request is allowed, false if limit exceeded
      */
     public function attempt(string $identifier): bool
     {
-        $file = $this->getFilePath($identifier);
-        $now = time();
-
-        // Read existing attempts
-        $attempts = $this->readAttempts($file);
-
-        // Remove expired attempts (outside the window)
-        $cutoff = $now - $this->windowSeconds;
-        $attempts = array_filter($attempts, fn($timestamp) => $timestamp > $cutoff);
-
-        // Check if limit exceeded
-        if (count($attempts) >= $this->maxAttempts) {
+        $handle = $this->openLocked($this->getFilePath($identifier), LOCK_EX);
+        if ($handle === null) {
             return false;
         }
 
-        // Record this attempt
-        $attempts[] = $now;
-        $this->writeAttempts($file, $attempts);
+        try {
+            $now = time();
+            $attempts = $this->readLocked($handle);
 
-        return true;
+            // Remove expired attempts (outside the window)
+            $cutoff = $now - $this->windowSeconds;
+            $attempts = array_values(array_filter($attempts, fn($timestamp) => $timestamp > $cutoff));
+
+            // Check if limit exceeded
+            if (count($attempts) >= $this->maxAttempts) {
+                return false;
+            }
+
+            // Record this attempt
+            $attempts[] = $now;
+            if (!$this->writeLocked($handle, $attempts)) {
+                return false;
+            }
+
+            return true;
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
     }
 
     /**
      * Get the number of seconds until the rate limit resets.
+     *
+     * Read under a shared lock for a consistent snapshot. Informational
+     * only (drives the Retry-After header), so I/O failure returns 0
+     * rather than denying anything.
      *
      * @param string $identifier Usually the client IP address
      * @return int Seconds until oldest attempt expires (0 if not limited)
      */
     public function getRetryAfter(string $identifier): int
     {
-        $file = $this->getFilePath($identifier);
-        $now = time();
-
-        $attempts = $this->readAttempts($file);
-        if (empty($attempts)) {
+        $handle = $this->openLocked($this->getFilePath($identifier), LOCK_SH);
+        if ($handle === null) {
             return 0;
         }
 
-        $cutoff = $now - $this->windowSeconds;
-        $attempts = array_filter($attempts, fn($timestamp) => $timestamp > $cutoff);
+        try {
+            $attempts = $this->readLocked($handle);
+            if (empty($attempts)) {
+                return 0;
+            }
 
-        if (count($attempts) < $this->maxAttempts) {
-            return 0;
+            $now = time();
+            $cutoff = $now - $this->windowSeconds;
+            $attempts = array_filter($attempts, fn($timestamp) => $timestamp > $cutoff);
+
+            if (count($attempts) < $this->maxAttempts) {
+                return 0;
+            }
+
+            // Time until the oldest attempt expires
+            $oldest = min($attempts);
+            return max(0, ($oldest + $this->windowSeconds) - $now);
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
         }
-
-        // Time until the oldest attempt expires
-        $oldest = min($attempts);
-        return max(0, ($oldest + $this->windowSeconds) - $now);
     }
 
     /**
      * Clear all attempts for an identifier (e.g., after successful login).
      *
+     * Truncates under an exclusive lock instead of unlinking, so a
+     * concurrent attempt() holding the same file cannot write to an
+     * unlinked inode and lose its update.
+     *
      * @param string $identifier Usually the client IP address
      */
     public function clear(string $identifier): void
     {
-        $file = $this->getFilePath($identifier);
-        if (file_exists($file)) {
-            unlink($file);
+        $handle = $this->openLocked($this->getFilePath($identifier), LOCK_EX);
+        if ($handle === null) {
+            return;
+        }
+
+        try {
+            ftruncate($handle, 0);
+            fflush($handle);
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
         }
     }
 
@@ -126,32 +173,68 @@ final class RateLimiter
     }
 
     /**
-     * Read attempts from file.
+     * Opens a bucket file and acquires an advisory lock, blocking until the
+     * lock is available. Mode 'c+' creates the file if missing without
+     * truncating it.
      *
-     * @return int[] Array of timestamps
+     * @param int $lock LOCK_EX for read-modify-write, LOCK_SH for reads.
+     * @return resource|null Locked file handle, or null on any failure.
      */
-    private function readAttempts(string $file): array
+    private function openLocked(string $file, int $lock)
     {
-        if (!file_exists($file)) {
-            return [];
+        $handle = @fopen($file, 'c+');
+        if ($handle === false) {
+            return null;
+        }
+        if (!flock($handle, $lock)) {
+            fclose($handle);
+            return null;
         }
 
-        $contents = file_get_contents($file);
-        if ($contents === false) {
+        return $handle;
+    }
+
+    /**
+     * Reads attempts from an already-locked bucket handle.
+     *
+     * @param resource $handle Locked file handle positioned anywhere.
+     * @return int[] Array of timestamps (empty on missing/corrupt data).
+     */
+    private function readLocked($handle): array
+    {
+        rewind($handle);
+        $contents = stream_get_contents($handle);
+        if ($contents === false || $contents === '') {
             return [];
         }
 
         $data = json_decode($contents, true);
-        return is_array($data) ? $data : [];
+        return is_array($data) ? array_values($data) : [];
     }
 
     /**
-     * Write attempts to file.
+     * Atomically replaces a locked bucket's contents (truncate + write +
+     * flush while still holding the lock).
      *
-     * @param int[] $attempts Array of timestamps
+     * @param resource $handle Locked file handle.
+     * @param int[] $attempts Array of timestamps.
      */
-    private function writeAttempts(string $file, array $attempts): void
+    private function writeLocked($handle, array $attempts): bool
     {
-        file_put_contents($file, json_encode($attempts), LOCK_EX);
+        $encoded = json_encode(array_values($attempts));
+        if ($encoded === false) {
+            return false;
+        }
+
+        rewind($handle);
+        if (!ftruncate($handle, 0)) {
+            return false;
+        }
+        if (fwrite($handle, $encoded) === false) {
+            return false;
+        }
+
+        return fflush($handle);
     }
+
 }
