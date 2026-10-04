@@ -46,21 +46,36 @@ foreach ($argv ?? [] as $arg) {
     }
 }
 
-$pdo = Database::get();
+$pdo = null;
+try {
+    $pdo = Database::get();
+} catch (Throwable $e) {
+    // Cron/monitoring sees a non-zero exit and a one-line reason — never a
+    // stack trace, DSN, or credentials.
+    fwrite(STDERR, "expire-card-pending: database unavailable ({$e->getMessage()})\n");
+    exit(1);
+}
 // Hint-only selection: only unreleased, still-pending card orders older
 // than the window. The atomic transition re-checks everything per order.
-$stmt = $pdo->prepare(
-    "SELECT id FROM orders
-      WHERE payment_method = 'card'
-        AND payment_status = 'pending'
-        AND status = 'pending'
-        AND inventory_released_at IS NULL
-        AND created_at < DATE_SUB(NOW(), INTERVAL :minutes MINUTE)
-      ORDER BY id"
-);
-$stmt->bindValue(':minutes', $minutes, PDO::PARAM_INT);
-$stmt->execute();
-$ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+// The prepare itself is inside the guarded block: on a database missing
+// the orders table, prepare() throws just like execute() would.
+try {
+    $stmt = $pdo->prepare(
+        "SELECT id FROM orders
+          WHERE payment_method = 'card'
+            AND payment_status = 'pending'
+            AND status = 'pending'
+            AND inventory_released_at IS NULL
+            AND created_at < DATE_SUB(NOW(), INTERVAL :minutes MINUTE)
+          ORDER BY id"
+    );
+    $stmt->bindValue(':minutes', $minutes, PDO::PARAM_INT);
+    $stmt->execute();
+    $ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Throwable $e) {
+    fwrite(STDERR, "expire-card-pending: candidate lookup failed ({$e->getMessage()})\n");
+    exit(1);
+}
 
 if ($ids === []) {
     echo "No stale card-pending orders (window {$minutes}m).\n";
@@ -70,6 +85,7 @@ if ($ids === []) {
 $service = new App\Services\OrderService();
 $expired = 0;
 $skipped = 0;
+$failed = 0;
 foreach ($ids as $id) {
     try {
         if ($service->expireStaleCardOrder((int) $id, $minutes)) {
@@ -82,7 +98,12 @@ foreach ($ids as $id) {
             echo "Skipped order #{$id} (already handled concurrently).\n";
         }
     } catch (Throwable $e) {
+        // One bad order must not prevent the rest, but the failure has to
+        // reach cron/monitoring: only order ids are printed, never customer
+        // data or secrets.
+        $failed++;
         fwrite(STDERR, "Failed to expire order #{$id}: {$e->getMessage()}\n");
     }
 }
-echo "Expired {$expired}/" . count($ids) . " orders ({$skipped} skipped as already handled).\n";
+echo "Expired {$expired}/" . count($ids) . " orders ({$skipped} skipped as already handled, {$failed} failed).\n";
+exit($failed > 0 ? 1 : 0);

@@ -58,3 +58,19 @@ leftover local dev artifact of PHP itself, not part of this scheme.)
 6. If a recent deploy caused it: roll back that deployment first, debug after.
 7. When restored: hit all four §1 checks yourself before closing out, and
    write a short post-mortem note into `docs/decisions/` per repo convention.
+
+## 5. Card-payment expiry cron (exit-code contract)
+
+`api/scripts/expire-card-pending.php` (every 15 min via system cron) moves
+stale card-`pending` orders to cancelled+failed and restores stock exactly
+once. It runs alongside callbacks and cancellations; all three serialize on
+the `inventory_released_at` claim, so overlapping runs are safe.
+
+- **Exit `0`**: all candidates expired or skipped (skips for already-handled
+  orders are normal, not failures). stdout carries per-order lines.
+- **Exit `1`**: at least one order failed, or the DB/lookup failed at
+  startup. stderr carries one line per failure with the order id only —
+  never customer data, tokens, or secrets.
+- **Monitor:** alert on any non-zero exit (same 2-consecutive-runs rule as
+  §2 to avoid flap noise); on alert, read stderr for the order id, then
+  inspect that order via `/api/admin/orders/{id}`.
