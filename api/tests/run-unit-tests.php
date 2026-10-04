@@ -24,7 +24,7 @@ use App\Core\Validator;
 
 // --- Isolated environment (never reads api/.env) -------------------------
 $envFile = tempnam(sys_get_temp_dir(), 'lb-unit-env-');
-file_put_contents((string) $envFile, "JWT_SECRET=lb-unit-test-secret\n");
+file_put_contents((string) $envFile, "JWT_SECRET=lb-unit-test-secret-with-enough-random-looking-characters\n");
 Env::load((string) $envFile);
 
 // --- Tiny assertion helpers ---------------------------------------------
@@ -166,6 +166,227 @@ if ($hadLogFile) {
     fclose($f);
 } elseif (is_file($logFile)) {
     unlink($logFile);
+}
+
+// --- 5. CSRF fail-closed on weak/missing secret ----------------------------
+$weakSecrets = ['', '   ', 'short', 'change-me', 'secret', 'insecure-default-secret', str_repeat('x', 31)];
+foreach ($weakSecrets as $i => $weak) {
+    // Simulate by directly testing sign() via reflection-free path: generateToken must throw.
+    $ref = new ReflectionClass(App\Core\Env::class);
+    $prop = $ref->getProperty('values');
+    $saved = $prop->getValue();
+    $prop->setValue(null, array_merge($saved, ['JWT_SECRET' => $weak]));
+    $threw = false;
+    try {
+        CsrfProtection::generateToken();
+    } catch (Throwable) {
+        $threw = true;
+    }
+    check($threw === true, "CSRF: weak/empty secret rejected (case {$i})");
+    // validateToken must fail closed (false, never true) with a bad secret.
+    check(CsrfProtection::validateToken($token) === false, "CSRF: validate fails closed on weak secret (case {$i})");
+    $prop->setValue(null, $saved);
+}
+// Restore good secret for remaining tests.
+{
+    $ref = new ReflectionClass(App\Core\Env::class);
+    $prop = $ref->getProperty('values');
+    $saved = $prop->getValue();
+    $saved['JWT_SECRET'] = 'lb-unit-test-secret-with-enough-random-looking-characters';
+    $prop->setValue(null, $saved);
+}
+
+// --- 6. PaymentService::isConfigured rejects empty values -----------------
+{
+    $ref = new ReflectionClass(App\Core\Env::class);
+    $prop = $ref->getProperty('values');
+    $saved = $prop->getValue();
+    $setEnv = static function (array $overrides) use ($prop, $saved): void {
+        $prop->setValue(null, array_merge($saved, $overrides));
+    };
+    $setEnv(['CMI_CLIENT_ID' => '', 'CMI_STORE_KEY' => '', 'CMI_HASH_KEY' => '', 'CMI_CALLBACK_URL' => '']);
+    check(App\Services\PaymentService::isConfigured() === false, 'Payments: empty CMI values not configured');
+    $setEnv(['CMI_CLIENT_ID' => '   ', 'CMI_STORE_KEY' => 'x', 'CMI_HASH_KEY' => 'y', 'CMI_CALLBACK_URL' => 'https://example.test/cb']);
+    check(App\Services\PaymentService::isConfigured() === false, 'Payments: whitespace CMI client id not configured');
+    $setEnv(['CMI_CLIENT_ID' => 'id', 'CMI_STORE_KEY' => 'store', 'CMI_HASH_KEY' => 'hash', 'CMI_CALLBACK_URL' => 'https://example.test/cb']);
+    check(App\Services\PaymentService::isConfigured() === true, 'Payments: full CMI values configured');
+    // Constructor must throw on empty values (fail-closed, no 503 surprise later).
+    $setEnv(['CMI_CLIENT_ID' => '', 'CMI_STORE_KEY' => '', 'CMI_HASH_KEY' => '', 'CMI_CALLBACK_URL' => '']);
+    check(throws(fn () => new App\Services\PaymentService()), 'Payments: constructor throws when CMI empty');
+    $prop->setValue(null, $saved);
+}
+
+// --- 7. OrderService integer quantity validation ---------------------------
+{
+    $svc = new ReflectionClass(App\Services\OrderService::class);
+    $method = $svc->getMethod('isPositiveInteger');
+    check($method->invoke(null, 3) === true, 'Qty: int 3 accepted');
+    check($method->invoke(null, '3') === true, 'Qty: string 3 accepted');
+    check($method->invoke(null, 2.5) === false, 'Qty: float 2.5 rejected');
+    check($method->invoke(null, '2.5') === false, 'Qty: decimal string rejected');
+    check($method->invoke(null, '2.0') === false, 'Qty: 2.0 string rejected');
+    check($method->invoke(null, 'abc') === false, 'Qty: malformed id rejected');
+    check($method->invoke(null, 0) === false, 'Qty: zero rejected');
+    check($method->invoke(null, -1) === false, 'Qty: negative rejected');
+    check($method->invoke(null, null) === false, 'Qty: null rejected');
+    // normalizeLines rejects decimals/duplicates/over-limit via private method.
+    $service = (new ReflectionClass(App\Services\OrderService::class))->newInstanceWithoutConstructor();
+    $normalize = $svc->getMethod('normalizeLines');
+    check(throws(fn () => $normalize->invoke($service, [['variant_id' => 1, 'quantity' => 2.5]])), 'Qty: normalize rejects float quantity');
+    check(throws(fn () => $normalize->invoke($service, [['variant_id' => 1, 'quantity' => '2.5']])), 'Qty: normalize rejects decimal string');
+    check(throws(fn () => $normalize->invoke($service, [['variant_id' => 'abc', 'quantity' => 1]])), 'Qty: normalize rejects malformed id');
+    check(throws(fn () => $normalize->invoke($service, [['variant_id' => 1, 'quantity' => 1], ['variant_id' => 1, 'quantity' => 1]])), 'Qty: normalize rejects duplicate lines');
+    check(throws(fn () => $normalize->invoke($service, [['variant_id' => 1, 'quantity' => 999]])), 'Qty: normalize rejects unreasonable quantity (>20)');
+}
+
+// --- 8. Rate-limit proxy behavior (X-Forwarded-For only from trusted) ------
+{
+    $_SERVER['REMOTE_ADDR'] = '203.0.113.9';
+    $reqWithForged = new Request('POST', '/api/test', [], [], ['X-Forwarded-For' => '1.2.3.4']);
+    $mw = new App\Core\RateLimitMiddleware('unit-test-proxy', 1000, 60);
+    $refMw = new ReflectionClass($mw);
+    $getIp = $refMw->getMethod('getClientIp');
+    // Untrusted by default (no TRUSTED_PROXIES) → REMOTE_ADDR wins.
+    check($getIp->invoke($mw, $reqWithForged) === '203.0.113.9', 'RateLimit: forged XFF ignored when proxy untrusted');
+    // Trusted proxy → first valid XFF wins.
+    $refEnv = new ReflectionClass(App\Core\Env::class);
+    $propEnv = $refEnv->getProperty('values');
+    $savedEnv = $propEnv->getValue();
+    $propEnv->setValue(null, array_merge($savedEnv, ['TRUSTED_PROXIES' => '203.0.113.9']));
+    check($getIp->invoke($mw, $reqWithForged) === '1.2.3.4', 'RateLimit: XFF honored from trusted proxy');
+    // Invalid XFF entries are skipped, invalid REMOTE_ADDR → 0.0.0.0.
+    $badReq = new Request('POST', '/api/test', [], [], ['X-Forwarded-For' => 'not-an-ip']);
+    check($getIp->invoke($mw, $badReq) === '203.0.113.9', 'RateLimit: invalid XFF falls back to REMOTE_ADDR');
+    $_SERVER['REMOTE_ADDR'] = 'garbage';
+    $noHeader = new Request('POST', '/api/test', [], [], []);
+    check($getIp->invoke($mw, $noHeader) === '0.0.0.0', 'RateLimit: invalid REMOTE_ADDR sanitized');
+    $_SERVER['REMOTE_ADDR'] = '203.0.113.9';
+    $propEnv->setValue(null, $savedEnv);
+}
+
+// --- 9. Shipping totals (free threshold + flat cost) -----------------------
+{
+    $refEnv = new ReflectionClass(App\Core\Env::class);
+    // Shipping is settings-driven; unit-test the pure rule via a stub:
+    // cost 30, threshold 500 → 400 pays 30, 600 is free, threshold 0 never free.
+    $calc = static function (int $subtotalCents, ?string $cost, ?string $threshold): int {
+        $c = is_numeric($cost) ? (float) $cost : 0.0;
+        $t = is_numeric($threshold) ? (float) $threshold : 0.0;
+        if ($c < 0) {
+            $c = 0.0;
+        }
+        if ($t > 0 && ($subtotalCents / 100) >= $t) {
+            return 0;
+        }
+        return (int) round($c * 100);
+    };
+    check($calc(40000, '30', '500') === 3000, 'Shipping: below threshold charges cost');
+    check($calc(60000, '30', '500') === 0, 'Shipping: at/above threshold is free');
+    check($calc(60000, '30', '0') === 3000, 'Shipping: threshold 0 never free');
+    check($calc(10000, '', null) === 0, 'Shipping: missing settings default to 0');
+}
+
+// --- 10. Newsletter signed unsubscribe token -------------------------------
+{
+    $refEnv = new ReflectionClass(App\Core\Env::class);
+    $propEnv = $refEnv->getProperty('values');
+    $savedEnv = $propEnv->getValue();
+    $email = 'Reader@Example.com';
+    $token = App\Controllers\NewsletterController::issueUnsubscribeToken($email);
+    check(App\Controllers\NewsletterController::verifyUnsubscribeToken($email, $token) === true, 'Newsletter: signed token verifies (case-insensitive email)');
+    check(App\Controllers\NewsletterController::verifyUnsubscribeToken('other@example.com', $token) === false, 'Newsletter: token bound to email');
+    check(App\Controllers\NewsletterController::verifyUnsubscribeToken($email, $token . 'tampered') === false, 'Newsletter: tampered token rejected');
+    check(App\Controllers\NewsletterController::verifyUnsubscribeToken($email, '') === false, 'Newsletter: empty token rejected');
+    $propEnv->setValue(null, $savedEnv);
+}
+
+// --- 11. MigrationRunner SQL splitter --------------------------------------
+{
+    $split = static fn (string $sql): array => App\Core\MigrationRunner::splitStatements($sql);
+    $exec = static fn (string $sql): array => App\Core\MigrationRunner::executableStatements($sql);
+
+    // Comment-prefixed SQL after a header comment must NOT be skipped:
+    // a leading comment + one statement is a single kept statement.
+    $withHeader = "-- header comment line 1\n-- header comment line 2\nALTER TABLE t ADD COLUMN c INT;";
+    $parts = $exec($withHeader);
+    check(count($parts) === 1 && str_contains($parts[0], 'ALTER TABLE'), 'Migrate: statement after leading comments is kept');
+
+    // A semicolon inside a string literal does not split.
+    $strSemi = "UPDATE t SET v = 'a;b' WHERE id = 1;";
+    check(count($split($strSemi)) === 1, 'Migrate: semicolon inside string does not split');
+
+    // A semicolon inside a line comment does not create a statement, and the
+    // real statement following the comment is still executed.
+    $commentSemi = "-- note: foo; bar\nSELECT 1;";
+    $parts = $exec($commentSemi);
+    check(count($parts) === 1 && str_contains($parts[0], 'SELECT 1'), 'Migrate: comment semicolon ignored, following statement kept');
+
+    // Block comments survive splitting; comment-only chunks are skipped.
+    $block = "/* file header */\nSELECT 1;\n-- trailing note";
+    $parts = $exec($block);
+    check(count($parts) === 1 && str_contains($parts[0], 'SELECT 1'), 'Migrate: block header kept with statement, trailing note skipped');
+
+    // DDL passes through untouched (executed in autocommit, never wrapped).
+    $ddl = "ALTER TABLE t ADD COLUMN c INT;\nCREATE TABLE IF NOT EXISTS u (id INT);";
+    check(count($exec($ddl)) === 2, 'Migrate: DDL statements pass through');
+
+    // SET/PREPARE/EXECUTE session style (014/015 pattern) stays intact.
+    $session = "SET @a := 1;\nPREPARE stmt FROM @a; EXECUTE stmt; DEALLOCATE PREPARE stmt;";
+    check(count($exec($session)) === 4, 'Migrate: SET/PREPARE/EXECUTE/DEALLOCATE split into 4');
+
+    // USE directives are skipped (connection already targets the database).
+    $withUse = "USE lucebianca;\nSELECT 1;";
+    $parts = $exec($withUse);
+    check(count($parts) === 1 && str_contains($parts[0], 'SELECT 1'), 'Migrate: USE directive skipped, real statement kept');
+    check(App\Core\MigrationRunner::isUseStatement('USE lucebianca;') === true, 'Migrate: USE detected');
+    check(App\Core\MigrationRunner::isUseStatement('UPDATE t SET u = 1;') === false, 'Migrate: UPDATE is not USE');
+
+    // Empty/comment-only input yields nothing executable.
+    check($exec("-- only a comment\n# another") === [], 'Migrate: comment-only batch is empty');
+
+    // Backtick identifier containing a semicolon does not split.
+    $backtick = 'ALTER TABLE `we;ird` ADD COLUMN c INT;';
+    check(count($split($backtick)) === 1, 'Migrate: semicolon inside backticks does not split');
+}
+
+// --- 12. Payment initiation URLs -------------------------------------------
+{
+    $ref = new ReflectionClass(App\Core\Env::class);
+    $prop = $ref->getProperty('values');
+    $saved = $prop->getValue();
+    $setEnv = static function (array $overrides) use ($prop): void {
+        $current = $prop->getValue();
+        $prop->setValue(null, array_merge($current, $overrides));
+    };
+    $setEnv(['CMI_CLIENT_ID' => 'test-client',
+        'CMI_STORE_KEY' => 'test-store',
+        'CMI_HASH_KEY' => 'test-hash-key-with-enough-length',
+        'CMI_CALLBACK_URL' => 'https://api.example.test/api/payments/callback',
+        'CMI_RETURN_URL' => 'https://shop.example.test/payment',
+        'SITE_URL' => 'https://shop.example.test',
+    ]);
+    $svc = new App\Services\PaymentService();
+    $init = $svc->initiatePayment(42, '199.00', '504', 'buyer@example.test', 'tokentest123');
+    $fields = $init['form_fields'];
+    check(str_starts_with($fields['okUrl'], 'https://shop.example.test/payment/42?'), 'Payments: okUrl targets storefront payment page');
+    check(str_contains($fields['okUrl'], 'pay=success'), 'Payments: okUrl carries success hint');
+    check(str_contains($fields['okUrl'], rawurlencode('tokentest123')), 'Payments: okUrl carries lookup token');
+    check(str_contains($fields['failUrl'], 'pay=failure'), 'Payments: failUrl carries failure hint');
+    check($fields['callbackUrl'] === 'https://api.example.test/api/payments/callback', 'Payments: callbackUrl stays the API endpoint');
+    check($fields['callbackUrl'] !== $fields['okUrl'] && $fields['callbackUrl'] !== $fields['failUrl'], 'Payments: callbackUrl differs from customer return URLs');
+    check(!str_contains($fields['okUrl'], '/api/payments/callback'), 'Payments: customer URLs never point at the API callback');
+    // The transmitted hash covers the exact transmitted URLs.
+    $hashString = $fields['clientid'] . '|' . $fields['oid'] . '|' . $fields['amount'] . '|'
+        . $fields['okUrl'] . '|' . $fields['failUrl'] . '|' . $fields['trantype'] . '||'
+        . $fields['currency'] . '|test-store|ver3';
+    $expectedHash = base64_encode(hash_hmac('sha512', $hashString, 'test-hash-key-with-enough-length', true));
+    check(hash_equals($expectedHash, $fields['hash']), 'Payments: request hash covers exact okUrl/failUrl');
+    // SITE_URL fallback when CMI_RETURN_URL is empty.
+    $setEnv(['CMI_RETURN_URL' => '']);
+    $svc2 = new App\Services\PaymentService();
+    $init2 = $svc2->initiatePayment(7, '10.00', '504', '', 'abc');
+    check(str_starts_with($init2['form_fields']['okUrl'], 'https://shop.example.test/payment/7?'), 'Payments: return base falls back to SITE_URL/payment');
+    $prop->setValue(null, $saved);
 }
 
 unlink((string) $envFile);

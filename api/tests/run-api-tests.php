@@ -11,7 +11,7 @@
  *     api/.env is never read and the developer database is never touched —
  *     DB credentials are copied from api/.env only as *connection defaults*,
  *     overridable via LB_TEST_DB_HOST / _PORT / _USER / _PASS / _NAME.
- *  2. Recreates the test schema from database/schema.sql snapshot (18 tables,
+ *  2. Recreates the test schema from database/schema.sql snapshot (19 tables,
  *     deterministic, includes lookup_token and drift repairs). The snapshot
  *     hard-codes `USE lucebianca;` / `CREATE DATABASE` — the runner rewrites
  *     that exact token to the test database name in memory before executing,
@@ -61,7 +61,7 @@ function parseEnvFile(string $path): array
 // --- 1. Resolve connection settings --------------------------------------
 // Defaults come from the developer's api/.env (connection details only —
 // values are never printed); every one can be overridden via LB_TEST_DB_*.
-$apiEnvPath = $repoRoot . '/.env';
+$apiEnvPath = $repoRoot . '/api/.env';
 $apiEnv = is_file($apiEnvPath) ? parseEnvFile($apiEnvPath) : [];
 
 $dbHost = (string) (getenv('LB_TEST_DB_HOST') ?: ($apiEnv['DB_HOST'] ?? '127.0.0.1'));
@@ -71,6 +71,13 @@ $dbUser = (string) (getenv('LB_TEST_DB_USER') ?: ($apiEnv['DB_USER'] ?? 'root'))
 $envDbPass = getenv('LB_TEST_DB_PASS');
 $dbPass = $envDbPass === false ? ($apiEnv['DB_PASS'] ?? '') : (string) $envDbPass;
 $dbName = (string) (getenv('LB_TEST_DB_NAME') ?: 'lucebianca_test');
+
+// This runner drops and recreates its target database. Restrict the name to
+// the test-database namespace so a typo or override cannot target production.
+if (preg_match('/^lucebianca_test(?:_[A-Za-z0-9_]+)?$/D', $dbName) !== 1) {
+    fwrite(STDERR, "Unsafe test database name. Use lucebianca_test or a lucebianca_test_* name.\n");
+    exit(1);
+}
 
 // Random per-run port: a crashed previous run can leave an orphaned server
 // holding a fixed port, which would make health checks hit stale state.
@@ -106,8 +113,51 @@ APP_TIMEZONE=Africa/Casablanca
 SITE_URL=http://localhost:3000
 CORS_ALLOWED_ORIGINS=http://localhost:3000
 RATE_LIMIT_STORAGE_DIR={$rateLimitDir}
+CMI_CLIENT_ID=test-client-id
+CMI_STORE_KEY=test-store-key-for-integration
+CMI_HASH_KEY=test-hash-key-for-integration-only
+CMI_GATEWAY_URL=https://payment.cmi.co.ma/fim/est3Dgate
+CMI_CALLBACK_URL=http://127.0.0.1:8090/api/payments/callback
+CMI_RETURN_URL=
 
 ENV);
+
+// Test CMI gateway secrets (mirror of the env above) for crafting signed
+// callbacks — the server verifies with the same values. NOTE: the HMAC key
+// is CMI_HASH_KEY; CMI_STORE_KEY is only part of the hashed string.
+$testCmiStoreKey = 'test-store-key-for-integration';
+$testCmiHashKey = 'test-hash-key-for-integration-only';
+$testCmiClientId = 'test-client-id';
+
+/**
+ * Builds a signed CMI callback payload (mirrors PaymentService::verifyCallback
+ * hash input) for card-payment integration tests.
+ */
+function cmiCallback(string $oid, string $amount, string $procCode, string $response, string $storeKey, string $hashKey, string $clientId): array
+{
+    $data = [
+        'clientid' => $clientId,
+        'oid' => $oid,
+        'AuthCode' => '654321',
+        'ProcReturnCode' => $procCode,
+        'Response' => $response,
+        'mdStatus' => '1',
+        'cavv' => 'cavv-test',
+        'eci' => '05',
+        'md' => 'md-test',
+        'rnd' => 'rnd-test',
+        'TransId' => 'TX-' . substr(md5($oid . $procCode), 0, 8),
+        'amount' => $amount,
+        'ErrMsg' => $procCode === '00' ? '' : 'Do not honour',
+    ];
+    $hashString = $data['clientid'] . '|' . $data['oid'] . '|' . $data['AuthCode'] . '|'
+        . $data['ProcReturnCode'] . '|' . $data['Response'] . '|' . $data['mdStatus'] . '|'
+        . $data['cavv'] . '|' . $data['eci'] . '|' . $data['md'] . '|' . $data['rnd'] . '|'
+        . $storeKey . '|ver3';
+    $data['HASH'] = base64_encode(hash_hmac('sha512', $hashString, $hashKey, true));
+
+    return $data;
+}
 
 // --- 3. Rebuild the isolated schema --------------------------------------
 // PHP 8.4 renamed the MySQL driver constants (Pdo\Mysql::*); keep working
@@ -138,7 +188,7 @@ $sql = (string) file_get_contents($schemaFile);
 // Redirect the hard-coded USE/CREATE DATABASE statements to the test DB.
 // Anything not matching these two exact directive forms fails loudly so
 // a future migration can never silently touch the development database.
-// Snapshot is the deterministic source (18 tables, includes 015); migrations
+// Snapshot is the deterministic source (19 tables, includes 015); migrations
 // 001→015 are not executed here because 010 has a duplicate-column conflict
 // after 008 and 014/015 are UNTESTED with INFORMATION_SCHEMA+PREPARE.
 $transformed = preg_replace(
@@ -164,7 +214,7 @@ do {
     }
 } while ($statement->nextRowset());
 $statement->closeCursor();
-echo "Schema ready (snapshot: database/schema.sql, 18 tables)\n";
+echo "Schema ready (snapshot: database/schema.sql, 19 tables)\n";
 
 // --- 4. Seed minimal deterministic data ----------------------------------
 $pdo = new PDO(
@@ -414,7 +464,10 @@ check($status === 204, 'wishlist remove with CSRF -> 204');
 [$status, , $body] = httpRequest('GET', '/api/wishlist', null, $bearer);
 check($status === 200 && $body['data'] === [], 'wishlist empty after removal');
 
-// --- Reviews (session + CSRF mutations) ----------------------------------
+// --- Reviews (session + CSRF + verified-email gate) ------------------------
+// Email verification is enforced server-side for reviews: mark the seeded
+// customer verified (mirrors clicking the emailed link) before submitting.
+$pdo->prepare('UPDATE users SET email_verified = 1 WHERE email = ?')->execute([$guestEmail]);
 [, , $csrfR] = httpRequest('GET', '/api/csrf-token');
 $csrfRev = ['X-CSRF-Token' => $csrfR['csrf_token'] ?? ''];
 
@@ -469,9 +522,12 @@ check(
 );
 check(($order['data']['email'] ?? '') === 'yasmine@example.com', 'guest order stores the checkout email');
 check(abs((float) ($order['data']['total_amount'] ?? 0) - 299.98) < 0.001, 'order total uses authoritative price (149.99 x 2)');
-// Repository records non-card orders as paid at placement (COD collected on
-// delivery); only card starts pending until the CMI flow completes.
-check(($order['data']['payment_status'] ?? '') === 'paid', 'COD order recorded with payment_status=paid');
+// Business rule 2026-10-03: every method starts pending (COD/WhatsApp are NOT
+// auto-paid); paid only via card callback success or admin confirmation.
+check(($order['data']['payment_status'] ?? '') === 'pending', 'COD order recorded with payment_status=pending (never auto-paid)');
+check(isset($order['data']['subtotal_amount']) && isset($order['data']['shipping_cost']), 'order exposes subtotal + shipping breakdown');
+check(abs((float) ($order['data']['subtotal_amount'] ?? -1) - 299.98) < 0.001, 'subtotal equals lines total when shipping is 0');
+check(abs((float) ($order['data']['shipping_cost'] ?? -1) - 0.0) < 0.001, 'default shipping is 0 when unconfigured');
 
 $orderItems = $order['data']['items'] ?? [];
 $lineUnitPrice = (float) ($orderItems[0]['price_at_purchase'] ?? -1);
@@ -482,7 +538,9 @@ check(
 );
 
 $orderId = (int) ($order['data']['id'] ?? 0);
-[$status, , $fetched] = httpRequest('GET', "/api/orders/{$orderId}");
+$guestLookupTokenEarly = (string) ($order['data']['lookup_token'] ?? '');
+// Guest lookup privacy: the token is required (404 without it).
+[$status, , $fetched] = httpRequest('GET', "/api/orders/{$orderId}?token=" . urlencode($guestLookupTokenEarly));
 check(
     $status === 200 && ($fetched['data']['email'] ?? '') === 'yasmine@example.com'
         && count($fetched['data']['items'] ?? []) === 1,
@@ -502,11 +560,38 @@ check(
     'stock decrement visible via cart validation (5 - 2 = 3)'
 );
 
-[$status, ] = httpRequest('POST', '/api/orders', array_merge($orderPayload, ['items' => [['variant_id' => 1, 'quantity' => 99]]]), $csrfOrd);
-check($status === 409, 'over-stock order -> 409 conflict');
+[$status, ] = httpRequest('POST', '/api/orders', array_merge($orderPayload, ['items' => [['variant_id' => 1, 'quantity' => 6]]]), $csrfOrd);
+check($status === 409, 'over-stock order (6 > 3 left) -> 409 conflict');
+
+[$status, , $overLimit] = httpRequest('POST', '/api/orders', array_merge($orderPayload, ['items' => [['variant_id' => 1, 'quantity' => 99]]]), $csrfOrd);
+check($status === 422, 'unreasonable quantity 99 -> 422 (max 20, not 409)');
 
 [$status, , $body] = httpRequest('POST', '/api/orders', array_merge($orderPayload, ['phone' => 'bad']), $csrfOrd);
 check($status === 422 && isset($body['errors']['phone']), 'invalid phone -> 422 field error');
+
+// Strict integer quantity: decimals, malformed ids, duplicates rejected (422).
+[$status, , $body] = httpRequest('POST', '/api/orders', array_merge($orderPayload, ['items' => [['variant_id' => 1, 'quantity' => 2.5]]]), $csrfOrd);
+check($status === 422, 'decimal quantity 2.5 -> 422');
+[$status, , $body] = httpRequest('POST', '/api/orders', array_merge($orderPayload, ['items' => [['variant_id' => 'abc', 'quantity' => 1]]]), $csrfOrd);
+check($status === 422, 'malformed variant id -> 422');
+[$status, , $body] = httpRequest('POST', '/api/orders', array_merge($orderPayload, ['items' => [['variant_id' => 1, 'quantity' => 1], ['variant_id' => 1, 'quantity' => 1]]]), $csrfOrd);
+check($status === 422, 'duplicate cart lines -> 422');
+[$status, , $body] = httpRequest('POST', '/api/orders', array_merge($orderPayload, ['items' => [['variant_id' => 1, 'quantity' => 999]]]), $csrfOrd);
+check($status === 422, 'unreasonable quantity 999 -> 422 (max 20)');
+
+// Guest lookup privacy: without token the order hides (404), with token it shows.
+$guestLookupToken = (string) ($order['data']['lookup_token'] ?? '');
+check($guestLookupToken !== '', 'guest order returns lookup_token');
+[$status, , ] = httpRequest('GET', "/api/orders/{$orderId}");
+check($status === 404, 'guest order without token -> 404 (hides existence)');
+[$status, , $withToken] = httpRequest('GET', "/api/orders/{$orderId}?token=" . urlencode($guestLookupToken));
+check($status === 200 && (int) ($withToken['data']['id'] ?? 0) === $orderId, 'guest order with token -> 200');
+
+// Customer cancellation restores stock (inventory policy).
+[$status, , $cancelled] = httpRequest('POST', "/api/orders/{$orderId}/cancel", ['lookup_token' => $guestLookupToken], $csrfOrd);
+check($status === 200 && ($cancelled['data']['status'] ?? '') === 'cancelled', 'guest cancel pending order -> cancelled');
+[, , $cartAfterCancel] = httpRequest('POST', '/api/cart', ['items' => [['variant_id' => 1, 'quantity' => 5]]], $csrfOrd);
+check(($cartAfterCancel['data']['valid'] ?? false) === true, 'stock restored after cancel (5 available again)');
 
 // Logged-in checkout attributes the order to the customer account.
 [, , $auth2] = httpRequest('POST', '/api/auth/register', [
@@ -636,7 +721,8 @@ check(($cartSale['data']['lines'][0]['unit_price'] ?? '') === '80.00', 'cart val
     'payment_method' => 'cod',
     'items' => [['variant_id' => $saleVariantId, 'quantity' => 2]],
 ], $csrfAdm);
-check($status === 201 && ($orderSale['data']['total_amount'] ?? '') === '160.00' && ($orderSale['data']['items'][0]['price_at_purchase'] ?? '') === '80.00', 'order total uses discounted sale price');
+// Shipping was set to 35.00 earlier (admin settings): 160 subtotal + 35 shipping.
+check($status === 201 && ($orderSale['data']['total_amount'] ?? '') === '195.00' && ($orderSale['data']['subtotal_amount'] ?? '') === '160.00' && ($orderSale['data']['shipping_cost'] ?? '') === '35.00' && ($orderSale['data']['items'][0]['price_at_purchase'] ?? '') === '80.00', 'order total uses discounted sale price + shipping breakdown');
 
 // WhatsApp checkout with valid address, city, postal_code (same required fields as COD)
 [$status, , $orderWA] = httpRequest('POST', '/api/orders', [
@@ -649,7 +735,7 @@ check($status === 201 && ($orderSale['data']['total_amount'] ?? '') === '160.00'
     'payment_method' => 'whatsapp',
     'items' => [['variant_id' => $saleVariantId, 'quantity' => 1]],
 ], $csrfAdm);
-check($status === 201 && ($orderWA['data']['total_amount'] ?? '') === '80.00' && ($orderWA['data']['payment_method'] ?? '') === 'whatsapp', 'whatsapp order with valid address/city/postal_code -> 201');
+check($status === 201 && ($orderWA['data']['total_amount'] ?? '') === '115.00' && ($orderWA['data']['subtotal_amount'] ?? '') === '80.00' && ($orderWA['data']['payment_method'] ?? '') === 'whatsapp', 'whatsapp order with valid address/city/postal_code -> 201 (80 + 35 shipping)');
 
 // --- Dashboard realized order rule (COD/WhatsApp pending delivered counts) -----
 // Overview, sales_chart and top_products must count a delivered COD/WhatsApp
@@ -689,7 +775,7 @@ foreach ($topBefore as $tp) {
 }
 
 // 1) Insert a delivered COD order whose payment_status is still pending — must be REALIZED.
-$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, shipping_address, city, postal_code, customer_name, phone, email, payment_method, payment_status, created_at) VALUES (NULL, 'delivered', '100.00', '123 Test St', 'Casa', '20000', 'Dash COD Pending', '0612345678', 'dashcod@test.com', 'cod', 'pending', NOW())")->execute();
+$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, subtotal_amount, shipping_cost, shipping_address, city, postal_code, customer_name, phone, email, lookup_token, payment_method, payment_status, created_at) VALUES (NULL, 'delivered', '100.00', '100.00', '0.00', '123 Test St', 'Casa', '20000', 'Dash COD Pending', '0612345678', 'dashcod@test.com', 'd1aa0b5e9c1e4f6a8b2d4f6a8b2d4f01', 'cod', 'pending', NOW())")->execute();
 $oid1 = (int) $pdo->lastInsertId();
 $pdo->prepare("INSERT INTO order_items (order_id, product_variant_id, quantity, price_at_purchase) VALUES (:oid, 1, 1, '100.00')")->execute([':oid' => $oid1]);
 
@@ -711,7 +797,7 @@ $recentIds1 = array_column($dash1['data']['recent_orders'] ?? [], 'id');
 check(in_array($oid1, $recentIds1, true), 'recent_orders includes delivered COD pending (shows all)');
 
 // 2) Insert a pending COD order whose status is still pending — must NOT be realized.
-$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, shipping_address, city, postal_code, customer_name, phone, email, payment_method, payment_status, created_at) VALUES (NULL, 'pending', '77.77', '123 Test St', 'Casa', '20000', 'Dash Pending Cod', '0612345678', 'dashpending@test.com', 'cod', 'pending', NOW())")->execute();
+$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, subtotal_amount, shipping_cost, shipping_address, city, postal_code, customer_name, phone, email, lookup_token, payment_method, payment_status, created_at) VALUES (NULL, 'pending', '77.77', '77.77', '0.00', '123 Test St', 'Casa', '20000', 'Dash Pending Cod', '0612345678', 'dashpending@test.com', 'd2bb0b5e9c1e4f6a8b2d4f6a8b2d4f02', 'cod', 'pending', NOW())")->execute();
 $oid2 = (int) $pdo->lastInsertId();
 $pdo->prepare("INSERT INTO order_items (order_id, product_variant_id, quantity, price_at_purchase) VALUES (:oid, 1, 1, '77.77')")->execute([':oid' => $oid2]);
 
@@ -726,7 +812,7 @@ check((int)(($dash2['data']['order_status_breakdown']['pending'] ?? 0)) === $pen
 check(in_array($oid2, array_column($dash2['data']['recent_orders'] ?? [], 'id'), true), 'recent_orders includes pending COD pending (shows all)');
 
 // 3) Insert a cancelled COD order with payment_status pending and status cancelled — must NOT be realized.
-$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, shipping_address, city, postal_code, customer_name, phone, email, payment_method, payment_status, created_at) VALUES (NULL, 'cancelled', '88.88', '123 Test St', 'Casa', '20000', 'Dash Cancelled', '0612345678', 'dashcancel@test.com', 'cod', 'pending', NOW())")->execute();
+$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, subtotal_amount, shipping_cost, shipping_address, city, postal_code, customer_name, phone, email, lookup_token, payment_method, payment_status, created_at) VALUES (NULL, 'cancelled', '88.88', '88.88', '0.00', '123 Test St', 'Casa', '20000', 'Dash Cancelled', '0612345678', 'dashcancel@test.com', 'd3cc0b5e9c1e4f6a8b2d4f6a8b2d4f03', 'cod', 'pending', NOW())")->execute();
 $oid3 = (int) $pdo->lastInsertId();
 $pdo->prepare("INSERT INTO order_items (order_id, product_variant_id, quantity, price_at_purchase) VALUES (:oid, 1, 1, '88.88')")->execute([':oid' => $oid3]);
 
@@ -737,7 +823,7 @@ check((int)($dash3['data']['overview']['total_orders'] ?? 0) === $ordersBefore +
 check((int)(($dash3['data']['order_status_breakdown']['cancelled'] ?? 0)) === $cancelledBefore + 1, 'order_status_breakdown increments cancelled (shows all)');
 
 // 4) Insert a delivered WhatsApp order with payment_status pending — must be REALIZED and increment again.
-$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, shipping_address, city, postal_code, customer_name, phone, email, payment_method, payment_status, created_at) VALUES (NULL, 'delivered', '55.00', '123 Test St', 'Casa', '20000', 'Dash WA Pending', '0612345678', 'dashwa@test.com', 'whatsapp', 'pending', NOW())")->execute();
+$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, subtotal_amount, shipping_cost, shipping_address, city, postal_code, customer_name, phone, email, lookup_token, payment_method, payment_status, created_at) VALUES (NULL, 'delivered', '55.00', '55.00', '0.00', '123 Test St', 'Casa', '20000', 'Dash WA Pending', '0612345678', 'dashwa@test.com', 'd4dd0b5e9c1e4f6a8b2d4f6a8b2d4f04', 'whatsapp', 'pending', NOW())")->execute();
 $oid4 = (int) $pdo->lastInsertId();
 $pdo->prepare("INSERT INTO order_items (order_id, product_variant_id, quantity, price_at_purchase) VALUES (:oid, 1, 1, '55.00')")->execute([':oid' => $oid4]);
 
@@ -751,12 +837,367 @@ check($row4 !== null && abs((float)($row4['sales'] ?? 0) - ($chartSalesBefore + 
 check($row4 !== null && (int)($row4['order_count'] ?? 0) === $chartCountBefore + 2, 'delivered WhatsApp pending increments chart count to +2');
 
 // 5) Verify that a processing COD pending also counts (edge of realized set) — processing is in the list.
-$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, shipping_address, city, postal_code, customer_name, phone, email, payment_method, payment_status, created_at) VALUES (NULL, 'processing', '40.00', '123 Test St', 'Casa', '20000', 'Dash Processing Cod', '0612345678', 'dashproc@test.com', 'cod', 'pending', NOW())")->execute();
+$pdo->prepare("INSERT INTO orders (user_id, status, total_amount, subtotal_amount, shipping_cost, shipping_address, city, postal_code, customer_name, phone, email, lookup_token, payment_method, payment_status, created_at) VALUES (NULL, 'processing', '40.00', '40.00', '0.00', '123 Test St', 'Casa', '20000', 'Dash Processing Cod', '0612345678', 'dashproc@test.com', 'dashproc5token0123456789abcdef0123456789abcdef01', 'cod', 'pending', NOW())")->execute();
 $oid5 = (int) $pdo->lastInsertId();
 $pdo->prepare("INSERT INTO order_items (order_id, product_variant_id, quantity, price_at_purchase) VALUES (:oid, 1, 1, '40.00')")->execute([':oid' => $oid5]);
 [$status, , $dash5] = httpRequest('GET', '/api/admin/dashboard-stats', null, $adminToken);
 check($status === 200, 'dashboard after processing COD pending -> 200');
 check(abs((float)($dash5['data']['overview']['total_sales'] ?? 0) - ($salesBefore + 195.0)) < 0.01, 'processing COD pending counts toward total_sales');
+
+// --- Payments config + shipping totals ------------------------------------
+[$status, , $payConfig] = httpRequest('GET', '/api/payments/config');
+check($status === 200 && isset($payConfig['data']['card_available']), 'payments config exposes card_available (no secrets)');
+check(($payConfig['data']['card_configured'] ?? false) === true, 'payments config reports configured CMI in test env');
+check(!isset($payConfig['data']['client_id']) && !isset($payConfig['data']['store_key']), 'payments config never leaks secrets');
+
+// Shipping totals: set flat 30 + threshold 500 via admin, verify breakdown.
+[$status] = httpRequest('PUT', '/api/admin/settings', ['shipping_cost' => '30.00', 'free_shipping_threshold' => '500.00'], $adminToken + $csrfAdm);
+check($status === 200, 'admin sets shipping cost + threshold');
+[, , $csrfShip] = httpRequest('GET', '/api/csrf-token');
+$csrfShipH = ['X-CSRF-Token' => $csrfShip['csrf_token'] ?? ''];
+[$status, , $shipOrder] = httpRequest('POST', '/api/orders', array_merge($orderPayload, ['email' => 'ship@test.com', 'items' => [['variant_id' => $saleVariantId, 'quantity' => 1]]]), $csrfShipH);
+check(
+    $status === 201 && ($shipOrder['data']['shipping_cost'] ?? '') === '30.00' && ($shipOrder['data']['total_amount'] ?? '') === '110.00',
+    'shipping added below threshold (80 + 30 = 110)'
+);
+// Reset shipping to 0 for remaining suites.
+[$status] = httpRequest('PUT', '/api/admin/settings', ['shipping_cost' => '0.00', 'free_shipping_threshold' => '0'], $adminToken + $csrfAdm);
+check($status === 200, 'admin resets shipping to 0');
+
+// --- Password reset flow (anti-enumeration, single-use, expiry) ------------
+[$status, , $forgotUnknown] = httpRequest('POST', '/api/auth/forgot-password', ['email' => 'nobody@example.com']);
+check($status === 200 && str_contains($forgotUnknown['message'] ?? '', 'If that email'), 'forgot-password unknown email -> generic 200');
+[$status, , $forgotKnown] = httpRequest('POST', '/api/auth/forgot-password', ['email' => $guestEmail]);
+check($status === 200 && str_contains($forgotKnown['message'] ?? '', 'If that email'), 'forgot-password known email -> same generic 200');
+// Fetch the hashed token directly (test DB only) to complete the flow.
+$resetRow = $pdo->query("SELECT password_reset_hash FROM users WHERE email = '{$guestEmail}' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+check(!empty($resetRow['password_reset_hash']), 'forgot-password stores a reset hash');
+// Cannot derive the raw token from the hash — verify rejection of garbage + empty.
+[$status, , ] = httpRequest('POST', '/api/auth/reset-password', ['token' => 'garbage-token', 'password' => 'newpassword123']);
+check($status === 400, 'reset-password garbage token -> 400');
+[$status, , $body] = httpRequest('POST', '/api/auth/reset-password', ['token' => '', 'password' => 'short']);
+check($status === 422, 'reset-password empty/short -> 422');
+
+// --- Newsletter subscribe email + signed unsubscribe ------------------------
+ // The subscribe endpoint shares the contact rate-limit bucket (3/10 min per
+ // IP); earlier suites already spent it. Clear the isolated test bucket so
+ // these assertions test newsletter logic, not rate limiting.
+foreach (glob($rateLimitDir . '/*.json') ?: [] as $f) {
+    @unlink($f);
+}
+// Mirror of NewsletterController::issueUnsubscribeToken with the known test
+// JWT secret (proves the stateless HMAC contract end to end).
+$mintUnsubToken = static function (string $email) use ($testJwtSecret): string {
+    $normalized = strtolower(trim($email));
+    $expiry = (string) (time() + 365 * 86400);
+    $sig = hash_hmac('sha256', $normalized . '|' . $expiry, $testJwtSecret);
+    return rtrim(strtr(base64_encode($normalized . '|' . $expiry . '|' . $sig), '+/', '-_'), '=');
+};
+[, , $csrfN] = httpRequest('GET', '/api/csrf-token');
+$csrfNH = ['X-CSRF-Token' => $csrfN['csrf_token'] ?? ''];
+// RESEND_API_KEY is empty in the test env: the welcome email is best-effort
+// and must never block the subscribe (201 either way).
+[$status, , $sub] = httpRequest('POST', '/api/newsletter/subscribe', ['email' => 'unsub@example.com'], $csrfNH);
+check($status === 201 && ($sub['data']['subscribed'] ?? false) === true, 'newsletter subscribe -> 201 subscribed=true');
+check(!isset($sub['data']['unsubscribe_token']) && !isset($sub['data']['unsubscribe_url']), 'newsletter subscribe response exposes no token/url (emailed instead)');
+$unsubToken = $mintUnsubToken('unsub@example.com');
+// GET only validates the emailed link (read-only) — must not mutate.
+[$status, , $verify] = httpRequest('GET', '/api/newsletter/unsubscribe?email=' . urlencode('unsub@example.com') . '&token=' . urlencode($unsubToken));
+check($status === 200 && ($verify['data']['valid'] ?? false) === true, 'newsletter GET verify valid link -> 200 (read-only)');
+[$status, , ] = httpRequest('GET', '/api/newsletter/unsubscribe?email=' . urlencode('unsub@example.com') . '&token=bad');
+check($status === 403, 'newsletter GET verify tampered token -> 403');
+// The POST below returns unsubscribed:true, proving the GET above did NOT
+// already unsubscribe (no scanner-triggered mutation).
+[$status, , ] = httpRequest('POST', '/api/newsletter/unsubscribe', ['email' => 'unsub@example.com'], $csrfNH);
+check($status === 422, 'newsletter unsubscribe without token -> 422 (email alone insufficient)');
+[$status, , $unsub] = httpRequest('POST', '/api/newsletter/unsubscribe', ['email' => 'unsub@example.com', 'token' => $unsubToken], $csrfNH);
+check($status === 200 && ($unsub['data']['unsubscribed'] ?? false) === true, 'newsletter signed unsubscribe -> 200');
+$auditCount = (int) $pdo->query("SELECT unsubscribe_count FROM newsletter_subscribers WHERE email = 'unsub@example.com'")->fetchColumn();
+check($auditCount === 1, 'newsletter unsubscribe_count audit = 1');
+[$status, , $unsubAgain] = httpRequest('POST', '/api/newsletter/unsubscribe', ['email' => 'unsub@example.com', 'token' => $unsubToken], $csrfNH);
+check($status === 200 && ($unsubAgain['data']['unsubscribed'] ?? true) === false, 'newsletter repeated unsubscribe -> 200 unsubscribed=false');
+$auditCount2 = (int) $pdo->query("SELECT unsubscribe_count FROM newsletter_subscribers WHERE email = 'unsub@example.com'")->fetchColumn();
+check($auditCount2 === 1, 'newsletter repeat does not double-count audit');
+[$status, , ] = httpRequest('POST', '/api/newsletter/unsubscribe', ['email' => 'other@example.com', 'token' => $unsubToken], $csrfNH);
+check($status === 403, 'newsletter token bound to email (mismatch -> 403)');
+
+// --- Email-verification gate for reviews ----------------------------------
+[, , $unverifiedAuth] = httpRequest('POST', '/api/auth/register', ['name' => 'Unverified', 'email' => 'unverified@example.com', 'password' => 'password123']);
+$unverifiedBearer = ['Authorization' => 'Bearer ' . ($unverifiedAuth['token'] ?? '')];
+[, , $csrfR2] = httpRequest('GET', '/api/csrf-token');
+$csrfR2H = ['X-CSRF-Token' => $csrfR2['csrf_token'] ?? ''];
+[$status, , ] = httpRequest('POST', '/api/products/test-tee/reviews', ['rating' => 5, 'comment' => 'x'], $unverifiedBearer + $csrfR2H);
+check($status === 403, 'unverified account cannot submit review -> 403');
+
+// --- Admin cancel restores stock ------------------------------------------
+[, , $csrfC] = httpRequest('GET', '/api/csrf-token');
+$csrfCH = ['X-CSRF-Token' => $csrfC['csrf_token'] ?? ''];
+[$status, , $toCancel] = httpRequest('POST', '/api/orders', array_merge($orderPayload, ['email' => 'cancelme@test.com', 'items' => [['variant_id' => $saleVariantId, 'quantity' => 1]]]), $csrfCH);
+$cancelId = (int) ($toCancel['data']['id'] ?? 0);
+check($status === 201 && $cancelId > 0, 'order for admin-cancel created');
+[$status, , $adminCancelled] = httpRequest('PUT', "/api/admin/orders/{$cancelId}", ['status' => 'cancelled'], $adminToken + $csrfCH);
+check($status === 200 && ($adminCancelled['data']['status'] ?? '') === 'cancelled', 'admin cancel -> cancelled + stock restored');
+
+// --- Card payments: return URLs, callbacks, atomic idempotent inventory ----
+$stockOf = static function (int $variantId, array $csrfH): int {
+    [, , $c] = httpRequest('POST', '/api/cart', ['items' => [['variant_id' => $variantId, 'quantity' => 20]]], $csrfH);
+    return (int) ($c['data']['lines'][0]['available_quantity'] ?? -1);
+};
+$mkCardOrder = static function (string $email) use ($orderPayload, $csrfCH): array {
+    [, , $o] = httpRequest('POST', '/api/orders', array_merge($orderPayload, [
+        'email' => $email,
+        'payment_method' => 'card',
+        'items' => [['variant_id' => 1, 'quantity' => 1]],
+    ]), $csrfCH);
+    return $o['data'] ?? [];
+};
+check($stockOf(1, $csrfCH) === 3, 'variant 1 stock is 3 entering card suite');
+
+// A: initiate targets the storefront page; paid callback + idempotent replay.
+$cardA = $mkCardOrder('carda@test.com');
+$cardAId = (int) ($cardA['id'] ?? 0);
+$cardAToken = (string) ($cardA['lookup_token'] ?? '');
+check($cardAId > 0 && ($cardA['payment_status'] ?? '') === 'pending', 'card order created pending');
+check($stockOf(1, $csrfCH) === 2, 'card order reserves stock (3 - 1 = 2)');
+[$status, , $initA] = httpRequest('POST', '/api/payments/initiate', ['order_id' => $cardAId, 'lookup_token' => $cardAToken, 'email' => 'carda@test.com'], $csrfCH);
+check($status === 200 && isset($initA['data']['gateway_url'], $initA['data']['form_fields']), 'initiate -> 200 gateway payload');
+$fA = $initA['data']['form_fields'] ?? [];
+$wantOk = "http://localhost:3000/payment/{$cardAId}?token=" . urlencode($cardAToken) . '&pay=success';
+$wantFail = "http://localhost:3000/payment/{$cardAId}?token=" . urlencode($cardAToken) . '&pay=failure';
+check(($fA['okUrl'] ?? '') === $wantOk, 'initiate okUrl is the storefront payment page (guest token, success hint)');
+check(($fA['failUrl'] ?? '') === $wantFail, 'initiate failUrl is the storefront payment page (failure hint)');
+check(($fA['callbackUrl'] ?? '') === 'http://127.0.0.1:8090/api/payments/callback', 'initiate callbackUrl stays the API server endpoint');
+check(($fA['okUrl'] ?? '') !== ($fA['callbackUrl'] ?? ''), 'customer return URLs differ from the API callback');
+$cardATotal = (string) ($cardA['total_amount'] ?? '149.99');
+$oidA = 'LB-' . $cardAId . '-' . time();
+[$status, , $cbPaid] = httpRequest('POST', '/api/payments/callback', cmiCallback($oidA, $cardATotal, '00', 'Approved', $testCmiStoreKey, $testCmiHashKey, $testCmiClientId));
+check($status === 200 && ($cbPaid['payment_status'] ?? '') === 'paid', 'paid callback -> 200 paid');
+[$status, , $stA] = httpRequest('GET', "/api/payments/status/{$cardAId}?token=" . urlencode($cardAToken));
+check($status === 200 && ($stA['data']['payment_status'] ?? '') === 'paid', 'status poll reflects paid (guest token)');
+[$status, , $cbReplay] = httpRequest('POST', '/api/payments/callback', cmiCallback($oidA, $cardATotal, '00', 'Approved', $testCmiStoreKey, $testCmiHashKey, $testCmiClientId));
+check($status === 200 && ($cbReplay['payment_status'] ?? '') === 'paid', 'paid callback replay -> 200 idempotent');
+check($stockOf(1, $csrfCH) === 2, 'paid replay never touches stock');
+
+// B: failed callback releases once; repeat is a no-op; late paid rejected.
+$cardB = $mkCardOrder('cardb@test.com');
+$cardBId = (int) ($cardB['id'] ?? 0);
+$cardBToken = (string) ($cardB['lookup_token'] ?? '');
+$cardBTotal = (string) ($cardB['total_amount'] ?? '149.99');
+check($cardBId > 0 && $stockOf(1, $csrfCH) === 1, 'card order B reserves stock (2 - 1 = 1)');
+$oidB = 'LB-' . $cardBId . '-' . time();
+[$status, , $cbFail] = httpRequest('POST', '/api/payments/callback', cmiCallback($oidB, $cardBTotal, '05', 'Declined', $testCmiStoreKey, $testCmiHashKey, $testCmiClientId));
+check($status === 200 && ($cbFail['payment_status'] ?? '') === 'failed', 'failed callback -> 200 failed');
+check($stockOf(1, $csrfCH) === 2, 'failed callback restores stock exactly once (1 + 1 = 2)');
+[$status, , $cbFail2] = httpRequest('POST', '/api/payments/callback', cmiCallback($oidB, $cardBTotal, '05', 'Declined', $testCmiStoreKey, $testCmiHashKey, $testCmiClientId));
+check($status === 200 && ($cbFail2['payment_status'] ?? '') === 'failed', 'failed callback replay -> 200');
+check($stockOf(1, $csrfCH) === 2, 'failed replay never double-restores stock');
+[$status, , ] = httpRequest('POST', '/api/payments/callback', cmiCallback($oidB, $cardBTotal, '00', 'Approved', $testCmiStoreKey, $testCmiHashKey, $testCmiClientId));
+check($status === 409, 'late paid callback after failure -> 409 (never resurrected)');
+[$status, , $stB] = httpRequest('GET', "/api/payments/status/{$cardBId}?token=" . urlencode($cardBToken));
+check($status === 200 && ($stB['data']['payment_status'] ?? '') === 'failed', 'order stays failed after late paid attempt');
+
+// C: customer cancel then late paid; repeated cancel is a safe no-op.
+$cardC = $mkCardOrder('cardc@test.com');
+$cardCId = (int) ($cardC['id'] ?? 0);
+$cardCToken = (string) ($cardC['lookup_token'] ?? '');
+$cardCTotal = (string) ($cardC['total_amount'] ?? '149.99');
+check($cardCId > 0 && $stockOf(1, $csrfCH) === 1, 'card order C reserves stock');
+[$status, , ] = httpRequest('POST', "/api/orders/{$cardCId}/cancel", ['lookup_token' => $cardCToken], $csrfCH);
+check($status === 200, 'card order customer-cancel -> 200');
+check($stockOf(1, $csrfCH) === 2, 'cancel restores stock (1 + 1 = 2)');
+[$status, , ] = httpRequest('POST', '/api/payments/callback', cmiCallback('LB-' . $cardCId . '-' . time(), $cardCTotal, '00', 'Approved', $testCmiStoreKey, $testCmiHashKey, $testCmiClientId));
+check($status === 409, 'paid callback after customer cancel -> 409');
+[$status, , $cancelAgain] = httpRequest('POST', "/api/orders/{$cardCId}/cancel", ['lookup_token' => $cardCToken], $csrfCH);
+check($status === 200 && ($cancelAgain['data']['status'] ?? '') === 'cancelled', 'repeated cancel -> 200 already-cancelled');
+check($stockOf(1, $csrfCH) === 2, 'repeated cancel never double-restores stock');
+
+// D: expiry cron end-to-end (real script, isolated test env).
+$cardD = $mkCardOrder('cardd@test.com');
+$cardDId = (int) ($cardD['id'] ?? 0);
+$cardDToken = (string) ($cardD['lookup_token'] ?? '');
+check($cardDId > 0 && $stockOf(1, $csrfCH) === 1, 'card order D reserves stock');
+$pdo->exec("UPDATE orders SET created_at = DATE_SUB(NOW(), INTERVAL 61 MINUTE) WHERE id = {$cardDId}");
+$runExpire = static function () use ($envFile, $repoRoot): array {
+    $cmd = [PHP_BINARY, $repoRoot . '/api/scripts/expire-card-pending.php', '--minutes=30'];
+    $proc = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $repoRoot, array_merge(getenv() ?: [], ['LB_TEST_ENV_FILE' => $envFile]));
+    if (!is_resource($proc)) {
+        return [1, '', 'proc_open failed'];
+    }
+    $out = stream_get_contents($pipes[1]);
+    $err = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    return [proc_close($proc), (string) $out, (string) $err];
+};
+[$expCode, $expOut] = $runExpire();
+check($expCode === 0 && str_contains($expOut, "Expired 1/1"), 'expiry cron expires the stale card order');
+[$status, , $stD] = httpRequest('GET', "/api/payments/status/{$cardDId}?token=" . urlencode($cardDToken));
+check($status === 200 && ($stD['data']['status'] ?? '') === 'cancelled' && ($stD['data']['payment_status'] ?? '') === 'failed', 'expired order is cancelled+failed');
+check($stockOf(1, $csrfCH) === 2, 'expiry restores stock (1 + 1 = 2)');
+
+// E: expiry skips an already-cancelled stale order (concurrent-style, no double restore).
+$cardE = $mkCardOrder('carde@test.com');
+$cardEId = (int) ($cardE['id'] ?? 0);
+$cardEToken = (string) ($cardE['lookup_token'] ?? '');
+check($cardEId > 0 && $stockOf(1, $csrfCH) === 1, 'card order E reserves stock');
+[$status, , ] = httpRequest('POST', "/api/orders/{$cardEId}/cancel", ['lookup_token' => $cardEToken], $csrfCH);
+check($status === 200 && $stockOf(1, $csrfCH) === 2, 'card order E cancelled (stock back to 2)');
+$pdo->exec("UPDATE orders SET created_at = DATE_SUB(NOW(), INTERVAL 61 MINUTE) WHERE id = {$cardEId}");
+[$expCode2, $expOut2] = $runExpire();
+// Already-cancelled E is excluded by the candidate selection (released), so
+// a quiet run reports no stale orders; either way nothing is double-restored.
+check($expCode2 === 0 && (str_contains($expOut2, 'No stale card-pending orders') || str_contains($expOut2, 'already handled')), 'expiry skips already-cancelled order (no double restore)');
+check($stockOf(1, $csrfCH) === 2, 'stock untouched by skipped expiry');
+
+// --- Paid orders cannot be cancelled (refund-first policy) ------------------
+// 3) Unpaid WhatsApp cancellation still restores stock exactly once.
+[$status, , $waOrder] = httpRequest('POST', '/api/orders', array_merge($orderPayload, ['email' => 'wa-cancel@test.com', 'payment_method' => 'whatsapp', 'items' => [['variant_id' => 1, 'quantity' => 1]]]), $csrfCH);
+$waId = (int) ($waOrder['data']['id'] ?? 0);
+$waToken = (string) ($waOrder['data']['lookup_token'] ?? '');
+check($status === 201 && $waId > 0 && $stockOf(1, $csrfCH) === 1, 'whatsapp order reserves stock (2 - 1 = 1)');
+[$status, , ] = httpRequest('POST', "/api/orders/{$waId}/cancel", ['lookup_token' => $waToken], $csrfCH);
+check($status === 200 && $stockOf(1, $csrfCH) === 2, 'unpaid whatsapp cancel restores stock once (1 + 1 = 2)');
+[$status, , ] = httpRequest('POST', "/api/orders/{$waId}/cancel", ['lookup_token' => $waToken], $csrfCH);
+check($status === 200 && $stockOf(1, $csrfCH) === 2, 'repeated whatsapp cancel is a no-op (no double restore)');
+
+// 1) Paid card order: customer AND admin cancellation both return 409 with
+// the refund message; stock stays reserved and no release is marked.
+$paidC = $mkCardOrder('paidcancel@test.com');
+$paidCId = (int) ($paidC['id'] ?? 0);
+$paidCToken = (string) ($paidC['lookup_token'] ?? '');
+$paidCTotal = (string) ($paidC['total_amount'] ?? '149.99');
+check($paidCId > 0 && $stockOf(1, $csrfCH) === 1, 'paid-cancel fixture card order reserves stock');
+[$status, , ] = httpRequest('POST', '/api/payments/callback', cmiCallback('LB-' . $paidCId . '-' . time(), $paidCTotal, '00', 'Approved', $testCmiStoreKey, $testCmiHashKey, $testCmiClientId));
+check($status === 200, 'paid-cancel fixture marked paid via callback');
+[$status, , $paidCancelBody] = httpRequest('POST', "/api/orders/{$paidCId}/cancel", ['lookup_token' => $paidCToken], $csrfCH);
+check($status === 409 && str_contains($paidCancelBody['error'] ?? '', 'refund'), 'paid card order customer-cancel -> 409 refund message');
+[$status, , $paidAdminBody] = httpRequest('PUT', "/api/admin/orders/{$paidCId}", ['status' => 'cancelled'], $adminToken + $csrfCH);
+check($status === 409 && str_contains($paidAdminBody['error'] ?? '', 'refund'), 'paid card order admin-cancel -> 409 refund message');
+[$status, , $stPaid] = httpRequest('GET', "/api/payments/status/{$paidCId}?token=" . urlencode($paidCToken));
+check($status === 200 && ($stPaid['data']['status'] ?? '') === 'pending' && ($stPaid['data']['payment_status'] ?? '') === 'paid', 'rejected cancel leaves order pending+paid (no cancelled+paid state)');
+check($stockOf(1, $csrfCH) === 1, 'rejected cancel restores no stock (still reserved)');
+$releasedPaid = $pdo->query("SELECT inventory_released_at FROM orders WHERE id = {$paidCId}")->fetchColumn();
+check($releasedPaid === null || $releasedPaid === false, 'rejected cancel marks no inventory release');
+
+// 2) COD order manually marked paid, then cancellation -> 409 on both paths.
+[$status, , $codPaid] = httpRequest('POST', '/api/orders', array_merge($orderPayload, ['email' => 'codpaid@test.com', 'payment_method' => 'cod', 'items' => [['variant_id' => 1, 'quantity' => 1]]]), $csrfCH);
+$codPaidId = (int) ($codPaid['data']['id'] ?? 0);
+$codPaidToken = (string) ($codPaid['data']['lookup_token'] ?? '');
+check($status === 201 && $codPaidId > 0 && $stockOf(1, $csrfCH) === 0, 'cod fixture order reserves last unit');
+[$status, , ] = httpRequest('PUT', "/api/admin/orders/{$codPaidId}", ['payment_status' => 'paid'], $adminToken + $csrfCH);
+check($status === 200, 'admin marks COD order paid (delivery collection)');
+[$status, , $codCancelBody] = httpRequest('POST', "/api/orders/{$codPaidId}/cancel", ['lookup_token' => $codPaidToken], $csrfCH);
+check($status === 409 && str_contains($codCancelBody['error'] ?? '', 'refund'), 'paid COD customer-cancel -> 409 refund message');
+[$status, , $codAdminBody] = httpRequest('PUT', "/api/admin/orders/{$codPaidId}", ['status' => 'cancelled'], $adminToken + $csrfCH);
+check($status === 409 && str_contains($codAdminBody['error'] ?? '', 'refund'), 'paid COD admin-cancel -> 409 refund message');
+check($stockOf(1, $csrfCH) === 0, 'rejected paid-COD cancel restores no stock');
+
+// 4) Racing callback-then-cancel ordering can never yield cancelled + paid.
+// (Covered above for card; same guard for WhatsApp marked paid — the paid
+// check runs under the row lock, so no interleave can slip through.)
+[$status, , $waPaid] = httpRequest('POST', '/api/orders', array_merge($orderPayload, ['email' => 'wapaid@test.com', 'payment_method' => 'whatsapp', 'items' => [['variant_id' => $saleVariantId, 'quantity' => 1]]]), $csrfCH);
+$waPaidId = (int) ($waPaid['data']['id'] ?? 0);
+$waPaidToken = (string) ($waPaid['data']['lookup_token'] ?? '');
+check($status === 201 && $waPaidId > 0, 'whatsapp fixture order created (sale variant, stock independent)');
+[$status, , ] = httpRequest('PUT', "/api/admin/orders/{$waPaidId}", ['payment_status' => 'paid'], $adminToken + $csrfCH);
+check($status === 200, 'admin marks WhatsApp order paid');
+[$status, , $waPaidCancel] = httpRequest('POST', "/api/orders/{$waPaidId}/cancel", ['lookup_token' => $waPaidToken], $csrfCH);
+check($status === 409 && str_contains($waPaidCancel['error'] ?? '', 'refund'), 'paid WhatsApp cancel -> 409 (race-safe: paid checked under row lock)');
+$waPaidRow = $pdo->query("SELECT status, payment_status, inventory_released_at FROM orders WHERE id = {$waPaidId}")->fetch(PDO::FETCH_ASSOC);
+check(
+    ($waPaidRow['status'] ?? '') === 'pending' && ($waPaidRow['payment_status'] ?? '') === 'paid' && $waPaidRow['inventory_released_at'] === null,
+    'paid order keeps pending+paid with no release marker (cancelled+paid+restored impossible)'
+);
+
+// --- MigrationRunner against scratch test databases ------------------------
+// Uses isolated lucebianca_test_migrate_* databases (same namespace guard as
+// the main suite) plus temp fixture dirs — the real test DB is untouched.
+require_once $repoRoot . '/api/src/autoload.php';
+$mkScratchDb = static function (string $suffix) use ($adminPdo, $dbHost, $dbPort, $dbUser, $dbPass, $dbName): PDO {
+    $scratch = $dbName . '_' . $suffix;
+    $adminPdo->exec("DROP DATABASE IF EXISTS `{$scratch}`");
+    $adminPdo->exec("CREATE DATABASE `{$scratch}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+    return new PDO(
+        "mysql:host={$dbHost};port={$dbPort};dbname={$scratch};charset=utf8mb4",
+        $dbUser,
+        $dbPass,
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+    );
+};
+$fxBase = sys_get_temp_dir() . '/lb-migrate-fx-' . getmypid();
+@mkdir($fxBase . '/good', 0777, true);
+@mkdir($fxBase . '/with-failure', 0777, true);
+@mkdir($fxBase . '/adopt', 0777, true);
+file_put_contents($fxBase . '/good/001_create_widget.sql', "-- Fixture 001: comment-prefixed DDL must execute (old runner skipped it).\n-- second header line; semicolon inside this comment is harmless.\nCREATE TABLE widget (\n  id INT PRIMARY KEY,\n  note VARCHAR(100) NOT NULL DEFAULT 'x;y'\n);\nINSERT INTO widget (id, note) VALUES (1, 'a;b');\n");
+file_put_contents($fxBase . '/good/002_add_flag.sql', "-- Fixture 002: guarded ALTER in session-variable style.\nSET @c := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'widget' AND COLUMN_NAME = 'flag');\nSET @s := IF(@c = 0, 'ALTER TABLE widget ADD COLUMN flag TINYINT NOT NULL DEFAULT 0', 'SELECT 1');\nPREPARE stmt FROM @s; EXECUTE stmt; DEALLOCATE PREPARE stmt;\n");
+foreach (['001_create_widget.sql', '002_add_flag.sql'] as $f) {
+    copy($fxBase . '/good/' . $f, $fxBase . '/with-failure/' . $f);
+}
+file_put_contents($fxBase . '/with-failure/003_will_fail.sql', "-- Fixture 003: first statement applies, second is invalid SQL.\nALTER TABLE widget ADD COLUMN boom INT NULL;\nTHIS IS NOT VALID SQL AT ALL;\n");
+file_put_contents($fxBase . '/adopt/001_create_widget2.sql', "CREATE TABLE widget2 (id INT PRIMARY KEY);\n");
+
+// 1) --dry-run is fully read-only: pending listed, tracking table NOT created.
+$scratchA = $mkScratchDb('migrate_a');
+$runnerA = new App\Core\MigrationRunner($scratchA, $fxBase . '/with-failure');
+$dryPending = $runnerA->pending();
+check(count($dryPending) === 3, 'migrate dry-run lists 3 pending fixtures');
+$trackCount = (int) $scratchA->query("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'schema_migrations'")->fetchColumn();
+check($trackCount === 0, 'migrate dry-run creates nothing (no tracking table)');
+$dryCounts = $runnerA->countStatements($dryPending);
+check(($dryCounts['001_create_widget.sql'] ?? 0) === 2, 'migrate dry-run counts comment-prefixed DDL (2 statements)');
+
+// 2) Real apply stops at the failure WITHOUT recording it (DDL ran in
+// autocommit: the good statement persists, the file is retried next run).
+$failedAt = '';
+try {
+    $runnerA->migrate();
+} catch (RuntimeException $e) {
+    $failedAt = $e->getMessage();
+}
+check(str_contains($failedAt, '003_will_fail.sql') && str_contains($failedAt, 'statement 2 of 2'), 'migrate failure names file + statement index');
+$stillPending = array_column($runnerA->pending(), 'name');
+check($stillPending === ['003_will_fail.sql'], 'failed migration stays pending (001+002 recorded, 003 not)');
+$widgetNote = $scratchA->query('SELECT note FROM widget WHERE id = 1')->fetchColumn();
+check($widgetNote === 'a;b', 'string-literal semicolons survive migration intact');
+$boomExists = (int) $scratchA->query("SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'widget' AND COLUMN_NAME = 'boom'")->fetchColumn();
+check($boomExists === 1, 'failed file partial DDL persists (honest non-atomicity, file unrecorded so re-runnable)');
+
+// 3) Repair + re-run records the file; further runs are no-ops.
+file_put_contents($fxBase . '/with-failure/003_will_fail.sql', "-- Fixture 003 repaired: valid no-op.\nSELECT 1;\n");
+check($runnerA->migrate() === ['003_will_fail.sql'], 'migrate retry after repair applies 003');
+check($runnerA->migrate() === [] && $runnerA->pending() === [], 'migrate with nothing pending is a no-op');
+
+// 4) Checksum drift on an applied file is reported, never re-applied.
+file_put_contents($fxBase . '/with-failure/001_create_widget.sql', "-- Fixture 001 edited after apply.\nSELECT 1;\n");
+check($runnerA->drifted() === ['001_create_widget.sql'], 'checksum drift detected on edited applied file');
+check($runnerA->pending() === [], 'drifted file is not re-applied');
+
+// 5) Baseline adoption: records without executing (for manually-migrated DBs).
+$scratchB = $mkScratchDb('migrate_b');
+$scratchB->exec('CREATE TABLE widget2 (id INT PRIMARY KEY)');
+$runnerB = new App\Core\MigrationRunner($scratchB, $fxBase . '/adopt');
+check($runnerB->baseline() === ['001_create_widget2.sql'], 'baseline records pending files without executing');
+check($runnerB->pending() === [], 'baselined files are no longer pending');
+// looksManuallyMigrated: orders table + zero history rows.
+$scratchC = $mkScratchDb('migrate_c');
+$runnerC = new App\Core\MigrationRunner($scratchC, $fxBase . '/adopt');
+check($runnerC->looksManuallyMigrated() === false, 'empty database is not manually-migrated');
+$scratchC->exec('CREATE TABLE orders (id INT PRIMARY KEY)');
+check($runnerC->looksManuallyMigrated() === true, 'tables without history are flagged for baseline adoption');
+// Cleanup scratch databases + fixtures (main test DB untouched throughout).
+foreach (['migrate_a', 'migrate_b', 'migrate_c'] as $sfx) {
+    try {
+        $adminPdo->exec("DROP DATABASE IF EXISTS `{$dbName}_{$sfx}`");
+    } catch (Throwable) {
+    }
+}
+foreach (glob($fxBase . '/*/*.sql') ?: [] as $f) {
+    @unlink($f);
+}
+@rmdir($fxBase . '/good');
+@rmdir($fxBase . '/with-failure');
+@rmdir($fxBase . '/adopt');
+@rmdir($fxBase);
 
 // --- Error-response safety ------------------------------------------------
 [, , $nf] = httpRequest('GET', '/api/nonexistent-route');
