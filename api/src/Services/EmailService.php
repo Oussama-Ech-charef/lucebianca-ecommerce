@@ -51,6 +51,62 @@ final class EmailService
     }
 
     /**
+     * Sends a one-time password-reset email (1h expiry, single-use).
+     *
+     * @throws \RuntimeException When Resend is unreachable or rejects the send.
+     */
+    public function sendPasswordResetEmail(string $to, string $name, string $resetLink): void
+    {
+        $safeName = htmlspecialchars($name, ENT_QUOTES, 'UTF-8');
+        $safeLink = htmlspecialchars($resetLink, ENT_QUOTES, 'UTF-8');
+        $html = <<<HTML
+<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#fafafa;font-family:Arial,Helvetica,sans-serif;color:#171717;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fafafa;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%;background:#ffffff;border:1px solid #e5e5e5;border-radius:12px;padding:32px;">
+        <tr><td style="font-family:Georgia,'Times New Roman',serif;font-size:24px;color:#171717;padding-bottom:16px;">Luce Bianca</td></tr>
+        <tr><td style="font-size:14px;line-height:1.6;color:#404040;">Hi $safeName,<br/><br/>We received a request to reset your password. Click below to choose a new one. This link expires in 1 hour and can only be used once.</td></tr>
+        <tr><td style="padding:24px 0;"><a href="$safeLink" style="display:inline-block;background:#171717;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;padding:12px 24px;border-radius:8px;">Reset my password</a></td></tr>
+        <tr><td style="font-size:12px;line-height:1.6;color:#737373;">If you did not request this, ignore this email — your password stays unchanged.<br/><br/>If the button does not work, copy this link:<br/><span style="color:#404040;">$safeLink</span></td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>
+HTML;
+        $this->send($to, 'Reset your Luce Bianca password', $html);
+    }
+
+    /**
+     * Sends the newsletter welcome / confirm email with a signed unsubscribe link.
+     *
+     * @throws \RuntimeException When Resend is unreachable or rejects the send.
+     */
+    public function sendNewsletterWelcome(string $to, string $unsubscribeLink): void
+    {
+        $safeLink = htmlspecialchars($unsubscribeLink, ENT_QUOTES, 'UTF-8');
+        $safeTo = htmlspecialchars($to, ENT_QUOTES, 'UTF-8');
+        $html = <<<HTML
+<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#fafafa;font-family:Arial,Helvetica,sans-serif;color:#171717;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fafafa;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%;background:#ffffff;border:1px solid #e5e5e5;border-radius:12px;padding:32px;">
+        <tr><td style="font-family:Georgia,'Times New Roman',serif;font-size:24px;padding-bottom:16px;">Luce Bianca</td></tr>
+        <tr><td style="font-size:14px;line-height:1.6;color:#404040;">Thanks for subscribing ($safeTo). You will receive offers and new arrivals.<br/><br/><a href="$safeLink">Unsubscribe</a> at any time (signed link, single-purpose).</td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>
+HTML;
+        $this->send($to, 'Welcome to Luce Bianca newsletter', $html);
+    }
+
+    /**
      * Sends an order confirmation email to the customer.
      *
      * @param string $to           Customer email address.
@@ -223,6 +279,9 @@ HTML;
         $safeName = htmlspecialchars($customerName, ENT_QUOTES, 'UTF-8');
         $orderId = (int) $orderData['id'];
         $totalAmount = htmlspecialchars($orderData['total_amount'] ?? '0.00', ENT_QUOTES, 'UTF-8');
+        $subtotal = htmlspecialchars($orderData['subtotal_amount'] ?? $orderData['total_amount'] ?? '0.00', ENT_QUOTES, 'UTF-8');
+        $shipping = htmlspecialchars($orderData['shipping_cost'] ?? '0.00', ENT_QUOTES, 'UTF-8');
+        $shippingLabel = ((float) ($orderData['shipping_cost'] ?? 0)) > 0 ? $shipping . ' MAD' : 'Free';
         $shippingAddress = htmlspecialchars($orderData['shipping_address'] ?? '', ENT_QUOTES, 'UTF-8');
         $paymentMethod = htmlspecialchars($orderData['payment_method'] ?? '', ENT_QUOTES, 'UTF-8');
 
@@ -293,6 +352,14 @@ HTML;
                   <td style="padding:8px 0;text-align:right;">Price</td>
                 </tr>
                 $itemsHtml
+                <tr>
+                  <td colspan="2" style="padding:8px 0 0 0;">Subtotal</td>
+                  <td style="padding:8px 0 0 0;text-align:right;">$subtotal MAD</td>
+                </tr>
+                <tr>
+                  <td colspan="2" style="padding:4px 0 0 0;">Shipping</td>
+                  <td style="padding:4px 0 0 0;text-align:right;">$shippingLabel</td>
+                </tr>
                 <tr style="font-weight:600;">
                   <td colspan="2" style="padding:16px 0 8px 0;">Total</td>
                   <td style="padding:16px 0 8px 0;text-align:right;">$totalAmount MAD</td>
