@@ -28,9 +28,9 @@ lucebianca/
 ## Requirements
 
 - Node.js 18+ (Next.js 16), npm
-- PHP 8.1+ with `ext-pdo_mysql`
+- PHP 8.1+ with `ext-mbstring` and `ext-pdo_mysql`
 - MySQL 8 / MariaDB 10.4+
-- Composer (optional — the API ships a manual PSR-4 autoloader fallback)
+- Composer (needed for Cloudinary image uploads; the manual PSR-4 autoloader supports the rest of the API)
 
 ## Setup
 
@@ -48,8 +48,8 @@ mysql -u root -p lucebianca < database/migrations/015_add_orders_lookup_token.sq
 
 ```bash
 cd api
-cp .env.example .env      # then fill in DB credentials + JWT secret
-composer dump-autoload    # optional; the manual autoloader works too
+cp .env.example .env      # set DB credentials and generate JWT_SECRET (32+ random characters)
+composer install          # install Cloudinary dependency; commit the generated composer.lock
 php -S 127.0.0.1:8090 public/index.php
 ```
 
@@ -63,6 +63,10 @@ cp .env.example .env.local
 npm install
 npm run dev               # http://localhost:3000
 ```
+
+The example environment files contain placeholders only. Keep secrets in the
+ignored `.env` / `.env.local` files and never commit those files. Frontend
+`NEXT_PUBLIC_*` values are public and are embedded in the frontend build.
 
 ## API
 

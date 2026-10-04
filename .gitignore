@@ -8,8 +8,8 @@
 .env.*.local
 .env.production
 .env.development
-config/database.php      # if DB credentials are hardcoded here
-config/secrets.php
+/api/config/database.php # if DB credentials are hardcoded here
+/api/config/secrets.php
 
 # --- Node.js / Next.js ---
 node_modules/
@@ -22,7 +22,6 @@ next-env.d.ts
 
 # --- PHP / Composer ---
 vendor/
-composer.lock
 
 # --- Logs ---
 *.log
