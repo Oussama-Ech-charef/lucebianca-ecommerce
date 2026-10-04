@@ -19,6 +19,20 @@
   `paid` OR (`cod`/`whatsapp` + `processing`/`shipped`/`delivered`) so pending
   COD still contributes once fulfilled, while `cancelled` never does.
 
+## Admin order transitions (`OrderService::adminUpdate()`, single transaction)
+
+- `PUT /api/admin/orders/{id}` validates ENUMs (422), then runs everything
+  under `SELECT ... FOR UPDATE` — controller pre-reads are never trusted.
+- Cancelled + paid in one request → 409 (never assembled, even transiently).
+- A cancelled order (already cancelled, or being cancelled) can never be
+  marked paid → 409 refund-first; paid orders can never be cancelled → 409,
+  with no stock restore either way.
+- Cancelling reuses the exact cancel guards + conditional release claim, so
+  stock restores exactly once; marking a pending payment failed releases the
+  reservation in the same transaction (callback parity, never for paid).
+- Pending→paid confirmations, status-only moves, and idempotent replays work
+  exactly as before.
+
 ## Card return flow (customer page vs. server callback)
 
 - `CMI_CALLBACK_URL` = server-to-server endpoint (`POST

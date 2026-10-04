@@ -388,6 +388,158 @@ final class OrderService
         return $order;
     }
 
+    /**
+     * Admin order update with atomic transition validation (PUT /api/admin/orders/{id}).
+     *
+     * Everything happens in ONE transaction under SELECT ... FOR UPDATE, so
+     * concurrent payment callbacks, cancellations, or admin updates cannot
+     * slip an invalid combination past a stale pre-read:
+     *
+     * - An order is never cancelled and marked paid in the same request
+     *   (409): that combination would keep the money while returning the
+     *   goods to the shelf.
+     * - A cancelled order (already cancelled, or being cancelled by this
+     *   request) can never be marked paid (409): paid money needs a refund
+     *   flow, not a status flip.
+     * - Cancelling reuses the exact cancelOrder guards (pending/processing
+     *   only, never paid) and the conditional release claim, so inventory
+     *   is restored exactly once — never for a paid order.
+     * - Marking a pending card/COD/WhatsApp payment failed releases the
+     *   reservation in the same transaction (mirrors the callback path, so
+     *   no dangling reservation is left for the expiry cron to miss). A
+     *   paid payment is never touched by this path, so stock is never
+     *   restored for an order that has been paid.
+     * - All other transitions (status-only moves, pending→paid
+     *   confirmations, idempotent replays) behave exactly as before.
+     *
+     * @param int   $id     Order id to update.
+     * @param array $fields Non-empty subset of: status, payment_status.
+     *                      Caller must have validated both against
+     *                      Order::STATUSES / Order::PAYMENT_STATUSES.
+     *
+     * @return Order The updated order (with items).
+     *
+     * @throws ConflictException On invalid transitions (existing structured
+     *                           409 contract) or a missing order.
+     */
+    public function adminUpdate(int $id, array $fields): Order
+    {
+        $pdo = \App\Core\Database::get();
+        $pdo->beginTransaction();
+        try {
+            $locked = $this->orders->findByIdForUpdate($id);
+            if ($locked === null) {
+                $pdo->rollBack();
+                throw new ConflictException('Order not found.');
+            }
+
+            $targetStatus = $fields['status'] ?? $locked->status;
+            $targetPayment = $fields['payment_status'] ?? $locked->paymentStatus;
+            $requestsPaid = ($fields['payment_status'] ?? null) === 'paid';
+            $requestsCancel = ($fields['status'] ?? null) === 'cancelled';
+
+            // Rule 1: conflicting combination — never cancelled + paid in one
+            // request. Only an explicit status=cancelled TOGETHER WITH an
+            // explicit payment_status=paid in THIS request triggers it; other
+            // paths that would assemble cancelled+paid fall through to the
+            // specific rejections below instead.
+            if ($requestsCancel && $requestsPaid) {
+                $pdo->rollBack();
+                throw new ConflictException(
+                    'An order cannot be cancelled and marked paid in the same update. ' .
+                    'Cancel unpaid orders, or confirm payment on open orders — never both at once.'
+                );
+            }
+
+            // Rule 2: a cancelled order can never become paid. Checked under
+            // the row lock, so a concurrent cancellation that commits first
+            // is visible here and a later paid-marking is rejected.
+            if (
+                $requestsPaid && $locked->paymentStatus !== 'paid'
+                && ($locked->status === 'cancelled' || $targetStatus === 'cancelled')
+            ) {
+                $pdo->rollBack();
+                throw new ConflictException(
+                    'A cancelled order cannot be marked paid. Process a refund before cancelling.'
+                );
+            }
+
+            if ($targetStatus === 'cancelled' && $locked->status !== 'cancelled') {
+                // Cancel path — same guards as cancelOrder(), enforced here
+                // under the lock instead of trusting a controller pre-read.
+                if (!in_array($locked->status, ['pending', 'processing'], true)) {
+                    $pdo->rollBack();
+                    throw new ConflictException('Only pending or processing orders can be cancelled.');
+                }
+                if ($locked->paymentStatus === 'paid') {
+                    $pdo->rollBack();
+                    throw new ConflictException('Paid orders cannot be cancelled automatically. Process a refund before cancelling.');
+                }
+
+                // Claim the release together with the status change; a lost
+                // race means a concurrent path already cancelled+released.
+                if (!$this->orders->updateStatusAndRelease($id, ['status' => 'cancelled'])) {
+                    $pdo->rollBack();
+                    $fresh = $this->getOrder($id);
+                    if ($fresh === null) {
+                        throw new ConflictException('Order not found.');
+                    }
+                    return $fresh;
+                }
+
+                foreach ($this->orders->itemsForOrder($id) as $item) {
+                    $this->orders->incrementStock((int) $item['product_variant_id'], (int) $item['quantity']);
+                }
+
+                // A simultaneous non-paid payment change (e.g. failed) still
+                // applies — Rule 1 already excluded paid above.
+                if (isset($fields['payment_status']) && $fields['payment_status'] !== $locked->paymentStatus) {
+                    $this->orders->updateStatus($id, ['payment_status' => $fields['payment_status']]);
+                }
+
+                $pdo->commit();
+            } else {
+                // Non-cancel path: plain write under lock. Holding the lock
+                // through commit is what makes Rule 2 race-safe against a
+                // concurrent cancellation.
+                if (
+                    $targetPayment === 'failed' && $locked->paymentStatus === 'pending'
+                    && $locked->inventoryReleasedAt === null
+                ) {
+                    // Pending→failed releases the reservation in the same
+                    // transaction (callback parity); never for paid orders —
+                    // the branch requires locked payment pending.
+                    if ($this->orders->updateStatusAndRelease($id, $fields)) {
+                        foreach ($this->orders->itemsForOrder($id) as $item) {
+                            $this->orders->incrementStock((int) $item['product_variant_id'], (int) $item['quantity']);
+                        }
+                    } else {
+                        // Defensive only (unreachable while holding the row
+                        // lock with a NULL marker read): apply the requested
+                        // fields without touching stock — never double-restore.
+                        $this->orders->updateStatus($id, $fields);
+                    }
+                } else {
+                    $this->orders->updateStatus($id, $fields);
+                }
+                $pdo->commit();
+            }
+        } catch (ConflictException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+
+        $fresh = $this->getOrder($id);
+        if ($fresh === null) {
+            throw new ConflictException('Order not found.');
+        }
+        return $fresh;
+    }
+
     /** Max units per cart line — prevents abuse while covering real bulk buys. */
     public const MAX_QUANTITY_PER_LINE = 20;
 

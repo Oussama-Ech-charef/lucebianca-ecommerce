@@ -89,11 +89,18 @@ final class OrdersController extends Controller
      * Body: {"status": "shipped"} and/or {"payment_status": "paid"}.
      * Both values are validated against the schema's ENUM lists (section 4):
      * anything else is rejected with 422 before it can reach the column.
+     *
+     * Transition rules are enforced atomically in
+     * OrderService::adminUpdate() (single transaction under SELECT ...
+     * FOR UPDATE), never trusted from a pre-read here:
+     * - cancelled + paid in one request → 409;
+     * - marking a cancelled order paid → 409 (refund first);
+     * - cancelling a paid order → 409 (refund first), with no stock restore.
      * Responds with the updated order + full items (same shape as
      * GET /api/orders/{id}, reusing OrderService::getOrder).
      *
      * @return never 200 with the updated order, 404 when missing,
-     *               422 on invalid/missing fields.
+     *               422 on invalid/missing fields, 409 on invalid transitions.
      */
     public function update(Request $request, array $params): never
     {
@@ -132,28 +139,11 @@ final class OrdersController extends Controller
             $this->error('Validation failed.', 422, ['errors' => $errors]);
         }
 
-        // Inventory policy: admin moving an order to cancelled restores its
-        // reserved stock exactly once (only from pending/processing — terminal
-        // or fulfilled states cannot be cancelled).
-        $current = $this->orderService->getOrder($id);
-        if (isset($fields['status']) && $fields['status'] === 'cancelled' && $current !== null && $current->status !== 'cancelled') {
-            if (!in_array($current->status, ['pending', 'processing'], true)) {
-                $this->error('Only pending or processing orders can be cancelled.', 409);
-            }
-            try {
-                $updated = $this->orderService->cancelOrder($id);
-            } catch (\App\Core\ConflictException $e) {
-                $this->error($e->getMessage(), 409);
-            }
-            // Apply a simultaneous payment_status change if requested (e.g.
-            // marking failed) after the cancellation.
-            if (isset($fields['payment_status']) && $fields['payment_status'] !== $updated->paymentStatus) {
-                $updated = $this->orderService->updateStatus($id, ['payment_status' => $fields['payment_status']]);
-            }
-            $this->json(['data' => $updated->toArrayWithoutLookupToken()]);
+        try {
+            $updated = $this->orderService->adminUpdate($id, $fields);
+        } catch (\App\Core\ConflictException $e) {
+            $this->error($e->getMessage(), 409);
         }
-
-        $updated = $this->orderService->updateStatus($id, $fields);
 
         $this->json(['data' => $updated->toArrayWithoutLookupToken()]);
     }
