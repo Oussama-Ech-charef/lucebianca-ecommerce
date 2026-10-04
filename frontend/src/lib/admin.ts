@@ -75,9 +75,16 @@ export function loginAdmin(email: string, password: string) {
   });
 }
 
-/** Persists a fresh admin session (localStorage + gate cookie). */
+/** Persists a fresh admin session (localStorage + gate cookie).
+ * Only the short-lived access JWT + profile are stored; the refresh token
+ * lives in its HttpOnly cookie (lb_admin_refresh) and is never written to
+ * localStorage for new sessions.
+ */
 export function saveAdminSession(payload: AdminAuthPayload): void {
-  window.localStorage.setItem(SESSION_KEY, JSON.stringify(payload));
+  window.localStorage.setItem(
+    SESSION_KEY,
+    JSON.stringify({ token: payload.token, admin: payload.admin }),
+  );
   setSessionCookie(payload.token);
 }
 
@@ -94,6 +101,16 @@ export function clearAdminSession(): void {
     // Storage blocked — the cookie clear below still drops the gate.
   }
   clearSessionCookie();
+}
+
+/**
+ * GET /api/admin/auth/me — verifies the admin JWT is still valid (real guard).
+ * Requires the admin access token.
+ */
+export function fetchAdminMe(token: string) {
+  return api<{ data: AdminAuthPayload["admin"] }>("/api/admin/auth/me", {
+    token,
+  });
 }
 
 /**
