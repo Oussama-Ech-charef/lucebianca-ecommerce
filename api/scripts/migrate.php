@@ -40,6 +40,7 @@ require __DIR__ . '/../src/autoload.php';
 
 use App\Core\Database;
 use App\Core\Env;
+use App\Core\ErrorLogger;
 use App\Core\MigrationRunner;
 
 Env::load(__DIR__ . '/../.env');
@@ -129,7 +130,11 @@ try {
         echo "  applied {$name}\n";
     }
 } catch (Throwable $e) {
-    fwrite(STDERR, 'FAILED: ' . $e->getMessage() . "\n");
+    // Structured record: static message + safe metadata only (filename /
+    // statement index). The raw PDO/SQL text is never passed to the logger.
+    ErrorLogger::logEvent('warning', 'Migration failed', null, MigrationRunner::failureContext($e));
+    // CLI keeps the useful detail, sanitized for secrets/DSNs/tokens first.
+    fwrite(STDERR, 'FAILED: ' . MigrationRunner::sanitizeCliMessage($e->getMessage()) . "\n");
     fwrite(STDERR, "(Nothing was recorded for the failed file — fix the cause, restore from backup if needed, and re-run.)\n");
     exit(1);
 }

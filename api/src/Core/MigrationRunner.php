@@ -44,6 +44,63 @@ final class MigrationRunner
     }
 
     /**
+     * Safe failure metadata for a migration throwable.
+     *
+     * Extracts ONLY the migration filename and statement position from the
+     * runner's own "Migration {file} failed at statement {i} of {n}" shape —
+     * the trailing PDO/SQL text is never included, so credentials, DSNs,
+     * tokens, and SQL values cannot reach the structured log. Returns [] when
+     * the message does not match (e.g. a connection failure before any file
+     * ran). Pair with the static message 'Migration failed' at the call site.
+     *
+     * @return array{file?: string, statement?: int, statements?: int}
+     */
+    public static function failureContext(\Throwable $e): array
+    {
+        if (preg_match(
+            '/^Migration ([A-Za-z0-9_.-]+\.sql) failed at statement (\d+) of (\d+)/',
+            $e->getMessage(),
+            $m
+        ) !== 1) {
+            return [];
+        }
+
+        return [
+            'file' => $m[1],
+            'statement' => (int) $m[2],
+            'statements' => (int) $m[3],
+        ];
+    }
+
+    /**
+     * Sanitizes a migration failure message for CLI output (stderr).
+     *
+     * Useful diagnostics (migration filename, statement index, SQLSTATE and
+     * short reason) pass through; credential/DSN/token-looking substrings
+     * are masked and the result is capped, so secrets can never scroll by
+     * in a terminal, CI log, or cron mail.
+     */
+    public static function sanitizeCliMessage(string $message): string
+    {
+        $patterns = [
+            '#Bearer\s+[A-Za-z0-9\-_.~+/=:.]{8,}#i',
+            '/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/',
+            '/\b(?:password|passwd|pwd|token|api[_-]?key|secret)\s*[:=]\s*\S+/i',
+            '/mysql:[^\s]*/i',
+            '/\bDB_(?:HOST|PORT|NAME|USER|PASS)\s*=\s*\S+/i',
+        ];
+        foreach ($patterns as $pattern) {
+            $message = (string) preg_replace($pattern, '[redacted]', $message);
+        }
+
+        $trimmed = trim($message);
+
+        return function_exists('mb_substr')
+            ? mb_substr($trimmed, 0, 1000)
+            : substr($trimmed, 0, 1000);
+    }
+
+    /**
      * Splits a SQL batch into individual statements.
      *
      * Tokenizer states: single-quoted string, double-quoted string, backtick
