@@ -25,6 +25,11 @@
  *  5. Runs the suites below against http://127.0.0.1:<port>, prints results,
  *     exits non-zero on any failure. Teardown drops the test DB and removes
  *     the temp env file.
+ *  6. Writes api/storage/test-reports/latest-report.json + latest-report.md
+ *     (gitignored) on every exit path; failed runs additionally leave a
+ *     timestamped api-<UTC>.json/.md copy. Reports carry failure labels +
+ *     counts only — never tokens, passwords, DSNs, emails, response bodies,
+ *     or customer data.
  *
  * Known limitations (documented per project instructions):
  *  - Actual outbound emails (Resend) cannot be exercised offline; tests
@@ -38,6 +43,152 @@
 declare(strict_types=1);
 
 error_reporting(E_ALL);
+
+// --- Test report (api/storage/test-reports/, gitignored) -------------------
+// Written by writeApiTestReport() via shutdown hook so EVERY exit path —
+// pass, fail, early abort, or fatal — leaves latest-report.json +
+// latest-report.md behind. Failed runs additionally leave a timestamped
+// copy. Console output and exit codes are untouched (files only).
+// Reports carry failure labels + counts only: no tokens, passwords, DSNs,
+// emails, response bodies, or customer data (labels are static strings,
+// still redacted before writing).
+$GLOBALS['report_start'] = microtime(true);
+$GLOBALS['report_start_utc'] = gmdate('c');
+$GLOBALS['report_runner'] = 'api';
+
+function sanitizeApiReportString(string $value): string
+{
+    // Defense in depth: strip anything credential- or PII-shaped before it
+    // can reach a report file, then cap length.
+    $patterns = [
+        '/Bearer\s+\S+/i',
+        '/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/', // JWT-shaped
+        '/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/', // emails
+        '/\b(?:password|passwd|token|api[_-]?key|secret|dsn)\s*[:=]\s*\S+/i',
+    ];
+    foreach ($patterns as $pattern) {
+        $value = (string) preg_replace($pattern, '[redacted]', $value);
+    }
+    $trimmed = trim($value);
+
+    return function_exists('mb_substr')
+        ? mb_substr($trimmed, 0, 500)
+        : substr($trimmed, 0, 500);
+}
+
+function writeApiTestReport(): void
+{
+    try {
+        $dir = __DIR__ . '/../storage/test-reports';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+        if (!is_dir($dir)) {
+            return; // Nowhere to write — never break the run over reporting.
+        }
+
+        $failures = $GLOBALS['failures'] ?? null;
+        $passed = (int) ($GLOBALS['passed'] ?? 0);
+        $failureNames = is_array($failures) ? array_values($failures) : [];
+
+        // Early abort / fatal before the harness initialized leaves $failures
+        // unset — report it as an error with the (sanitized) reason.
+        $fatal = null;
+        if (!is_array($failures)) {
+            $last = error_get_last();
+            if (is_array($last) && ((int) ($last['type'] ?? 0) & (E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR)) !== 0) {
+                $fatal = sanitizeApiReportString(($last['message'] ?? 'PHP fatal error') . ' @' . ($last['file'] ?? '?') . ':' . ($last['line'] ?? '?'));
+            }
+            $failureNames = $fatal !== null ? [$fatal] : ['Harness aborted before assertions ran.'];
+        }
+
+        $failed = count($failureNames);
+        $total = $passed + $failed;
+        $status = $failed === 0 ? 'passed' : 'failed';
+        $endUtc = gmdate('c');
+        $duration = round(microtime(true) - (float) ($GLOBALS['report_start'] ?? microtime(true)), 3);
+        $command = implode(' ', array_map('strval', (array) ($GLOBALS['argv'] ?? ['run-api-tests.php'])));
+
+        $report = [
+            'runner' => 'api',
+            'command' => sanitizeApiReportString($command),
+            'started_utc' => (string) ($GLOBALS['report_start_utc'] ?? $endUtc),
+            'finished_utc' => $endUtc,
+            'duration_seconds' => $duration,
+            'environment' => [
+                'php' => PHP_VERSION,
+                'app_env' => 'testing (isolated test database only)',
+                // Database NAME only — never host/user/password. The runner
+                // accepts solely lucebianca_test* names (see namespace guard).
+                'test_database' => (string) ($GLOBALS['report_db'] ?? 'unknown (aborted before validation)'),
+            ],
+            'totals' => [
+                'total' => $total,
+                'passed' => $passed,
+                'failed' => $failed,
+                'skipped' => 0,
+            ],
+            'status' => $status,
+            'failures' => array_map(
+                static fn ($name): array => [
+                    'name' => sanitizeApiReportString((string) $name),
+                    'message' => sanitizeApiReportString((string) $name),
+                ],
+                $failureNames
+            ),
+            'php_fatal' => $fatal,
+            'notes' => 'Raw request/response bodies are excluded by design (may carry tokens, emails, or customer data).',
+        ];
+
+        $json = json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (is_string($json)) {
+            @file_put_contents($dir . '/latest-report.json', $json . PHP_EOL, LOCK_EX);
+        }
+
+        $lines = [
+            '# API test report',
+            '',
+            '- Runner: `php api/tests/run-api-tests.php` (isolated test DB only)',
+            '- Command: `' . $report['command'] . '`',
+            '- Started (UTC): ' . $report['started_utc'],
+            '- Finished (UTC): ' . $report['finished_utc'],
+            '- Duration: ' . $report['duration_seconds'] . 's',
+            '- Environment: PHP ' . PHP_VERSION . ', test database `' . $report['environment']['test_database'] . '`',
+            '- Status: **' . $status . '**',
+            '',
+            '## Totals',
+            '',
+            '- Total: ' . $total,
+            '- Passed: ' . $passed,
+            '- Failed: ' . $failed,
+            '- Skipped: 0',
+            '',
+        ];
+        if ($failureNames === []) {
+            $lines[] = 'All tests passed.';
+        } else {
+            $lines[] = '## Failures';
+            $lines[] = '';
+            foreach ($failureNames as $name) {
+                $lines[] = '- ' . sanitizeApiReportString((string) $name);
+            }
+        }
+        $lines[] = '';
+        $lines[] = '_Raw bodies excluded by design (may carry tokens, emails, or customer data)._';
+        @file_put_contents($dir . '/latest-report.md', implode("\n", $lines) . "\n", LOCK_EX);
+
+        if ($status !== 'passed') {
+            $stamp = gmdate('Ymd-His');
+            if (is_string($json)) {
+                @file_put_contents($dir . "/api-{$stamp}Z.json", $json . PHP_EOL, LOCK_EX);
+            }
+            @file_put_contents($dir . "/api-{$stamp}Z.md", implode("\n", $lines) . "\n", LOCK_EX);
+        }
+    } catch (Throwable) {
+        // Reporting must never break the run or its exit code.
+    }
+}
+register_shutdown_function('writeApiTestReport');
 
 $repoRoot = dirname(__DIR__, 2); // api/tests -> api -> repo root
 $migrationsDir = $repoRoot . '/database/migrations';
@@ -78,6 +229,7 @@ if (preg_match('/^lucebianca_test(?:_[A-Za-z0-9_]+)?$/D', $dbName) !== 1) {
     fwrite(STDERR, "Unsafe test database name. Use lucebianca_test or a lucebianca_test_* name.\n");
     exit(1);
 }
+$GLOBALS['report_db'] = $dbName; // test-database name only (never credentials)
 
 // Random per-run port: a crashed previous run can leave an orphaned server
 // holding a fixed port, which would make health checks hit stale state.

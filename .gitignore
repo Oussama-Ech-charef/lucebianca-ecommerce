@@ -57,6 +57,10 @@ api/storage/cache/
 api/storage/rate-limits/
 api/storage/logs/
 
+# --- Local test reports (gitignored runtime artifacts) ---
+api/storage/test-reports/*
+!api/storage/test-reports/.gitkeep
+
 # --- Local agent/editor settings ---
 .claude/settings.local.json
 

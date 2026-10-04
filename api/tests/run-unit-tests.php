@@ -9,6 +9,10 @@
  * Exit code 0 = all passed. Writes nothing except a temporary .env in the
  * system temp dir plus one line in api/storage/logs/app-error.log (gitignored),
  * which is removed again afterwards.
+ *
+ * Every run also writes api/storage/test-reports/latest-report.json and
+ * latest-report.md (gitignored); failed runs additionally leave a
+ * timestamped unit-<UTC>.json/.md copy in the same directory.
  */
 
 declare(strict_types=1);
@@ -50,6 +54,149 @@ function throws(callable $fn): bool
         return true;
     }
 }
+
+// --- Test report (api/storage/test-reports/, gitignored) -------------------
+// Written by writeTestReport() via shutdown hook so EVERY exit path — pass,
+// fail, or fatal — leaves latest-report.json + latest-report.md behind.
+// Failed runs additionally leave a timestamped copy. Console output and
+// exit codes are untouched (this writer only creates files).
+// Reports carry failure labels + counts only: no tokens, passwords, DSNs,
+// emails, or customer data (labels are static strings, still redacted).
+$GLOBALS['report_start'] = microtime(true);
+$GLOBALS['report_start_utc'] = gmdate('c');
+$GLOBALS['report_runner'] = 'unit';
+
+function sanitizeReportString(string $value): string
+{
+    // Defense in depth: strip anything credential- or PII-shaped before it
+    // can reach a report file, then cap length.
+    $patterns = [
+        '/Bearer\s+\S+/i',
+        '/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/', // JWT-shaped
+        '/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/', // emails
+        '/\b(?:password|passwd|token|api[_-]?key|secret|dsn)\s*[:=]\s*\S+/i',
+    ];
+    foreach ($patterns as $pattern) {
+        $value = (string) preg_replace($pattern, '[redacted]', $value);
+    }
+    $trimmed = trim($value);
+
+    return function_exists('mb_substr')
+        ? mb_substr($trimmed, 0, 500)
+        : substr($trimmed, 0, 500);
+}
+
+function writeTestReport(): void
+{
+    try {
+        $dir = __DIR__ . '/../storage/test-reports';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+        if (!is_dir($dir)) {
+            return; // Nowhere to write — never break the run over reporting.
+        }
+
+        $runner = (string) ($GLOBALS['report_runner'] ?? 'unit');
+        $failures = $GLOBALS['failures'] ?? null;
+        $passed = (int) ($GLOBALS['passed'] ?? 0);
+        $failureNames = is_array($failures) ? array_values($failures) : [];
+
+        // A fatal before the harness initialized leaves $failures unset —
+        // report it as an error with the (sanitized) fatal message.
+        $fatal = null;
+        if (!is_array($failures)) {
+            $last = error_get_last();
+            if (is_array($last) && ((int) ($last['type'] ?? 0) & (E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR)) !== 0) {
+                $fatal = sanitizeReportString(($last['message'] ?? 'PHP fatal error') . ' @' . ($last['file'] ?? '?') . ':' . ($last['line'] ?? '?'));
+            }
+            $failureNames = $fatal !== null ? [$fatal] : ['Harness aborted before assertions ran.'];
+        }
+
+        $failed = count($failureNames);
+        $total = $passed + $failed;
+        $status = $failed === 0 ? 'passed' : 'failed';
+        $endUtc = gmdate('c');
+        $duration = round(microtime(true) - (float) ($GLOBALS['report_start'] ?? microtime(true)), 3);
+        $command = implode(' ', array_map('strval', (array) ($GLOBALS['argv'] ?? ['run-unit-tests.php'])));
+
+        $report = [
+            'runner' => $runner,
+            'command' => sanitizeReportString($command),
+            'started_utc' => (string) ($GLOBALS['report_start_utc'] ?? $endUtc),
+            'finished_utc' => $endUtc,
+            'duration_seconds' => $duration,
+            'environment' => [
+                'php' => PHP_VERSION,
+                'app_env' => 'testing (isolated temp env, no database)',
+            ],
+            'totals' => [
+                'total' => $total,
+                'passed' => $passed,
+                'failed' => $failed,
+                'skipped' => 0,
+            ],
+            'status' => $status,
+            'failures' => array_map(
+                static fn ($name): array => [
+                    'name' => sanitizeReportString((string) $name),
+                    'message' => sanitizeReportString((string) $name),
+                ],
+                $failureNames
+            ),
+            'php_fatal' => $fatal,
+            'notes' => 'Raw request/response bodies are excluded by design (may carry tokens or PII).',
+        ];
+
+        $json = json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (is_string($json)) {
+            @file_put_contents($dir . '/latest-report.json', $json . PHP_EOL, LOCK_EX);
+        }
+
+        $lines = [
+            '# Unit test report',
+            '',
+            '- Runner: `php api/tests/run-unit-tests.php`',
+            '- Command: `' . $report['command'] . '`',
+            '- Started (UTC): ' . $report['started_utc'],
+            '- Finished (UTC): ' . $report['finished_utc'],
+            '- Duration: ' . $report['duration_seconds'] . 's',
+            '- Environment: PHP ' . PHP_VERSION . ', isolated temp env (no database)',
+            '- Status: **' . $status . '**',
+            '',
+            '## Totals',
+            '',
+            '- Total: ' . $total,
+            '- Passed: ' . $passed,
+            '- Failed: ' . $failed,
+            '- Skipped: 0',
+            '',
+        ];
+        if ($failureNames === []) {
+            $lines[] = 'All tests passed.';
+        } else {
+            $lines[] = '## Failures';
+            $lines[] = '';
+            foreach ($failureNames as $name) {
+                $lines[] = '- ' . sanitizeReportString((string) $name);
+            }
+        }
+        $lines[] = '';
+        $lines[] = '_Raw bodies excluded by design (may carry tokens or PII)._';
+        @file_put_contents($dir . '/latest-report.md', implode("\n", $lines) . "\n", LOCK_EX);
+
+        if ($status !== 'passed') {
+            $stamp = gmdate('Ymd-His');
+            if (is_string($json)) {
+                @file_put_contents($dir . "/unit-{$stamp}Z.json", $json . PHP_EOL, LOCK_EX);
+            }
+            @file_put_contents($dir . "/unit-{$stamp}Z.md", implode("\n", $lines) . "\n", LOCK_EX);
+        }
+    } catch (Throwable) {
+        // Reporting must never break the run or its exit code.
+    }
+}
+register_shutdown_function('writeTestReport');
 
 // --- 1. Validator --------------------------------------------------------
 check(Validator::validate([], ['email' => ['required']]) !== [], 'Validator: required catches empty');
@@ -158,6 +305,192 @@ check(
     !isset($decoded['stack']) && !isset($decoded['trace']) && !isset($decoded['file']),
     'ErrorLogger: no stack trace / paths logged'
 );
+
+// --- 4b. ErrorLogger::redact (recursive, headers/bodies/arrays) ------------
+$redacted = ErrorLogger::redact([
+    'authorization' => 'Bearer secret-jwt-value',
+    'cookie' => 'lb_customer_refresh=abc',
+    'password' => 'hunter2',
+    'refresh_token' => 'tok123',
+    'cmi_hash_key' => 'hash123',
+    'nested' => [
+        'api_key' => 'key123',
+        'query' => ['unsubscribe_token' => 'u123', 'page' => '2'],
+    ],
+    'items' => [
+        ['card_number' => '4111111111111111', 'qty' => 2],
+    ],
+    'safe' => 'plain value',
+    'count' => 3,
+]);
+check(
+    $redacted['authorization'] === '[redacted]'
+    && $redacted['cookie'] === '[redacted]'
+    && $redacted['password'] === '[redacted]'
+    && $redacted['refresh_token'] === '[redacted]'
+    && $redacted['cmi_hash_key'] === '[redacted]'
+    && $redacted['nested']['api_key'] === '[redacted]'
+    && $redacted['nested']['query']['unsubscribe_token'] === '[redacted]'
+    && $redacted['nested']['query']['page'] === '2'
+    && $redacted['items'][0]['card_number'] === '[redacted]'
+    && $redacted['items'][0]['qty'] === 2
+    && $redacted['safe'] === 'plain value'
+    && $redacted['count'] === 3,
+    'ErrorLogger: redact() masks nested secrets, keeps safe values'
+);
+
+// Static English is preserved (only token-shaped values redact).
+$staticId = ErrorLogger::logEvent('warning', 'Authentication failure: missing bearer token', $request);
+$staticLines = file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+$staticDecoded = json_decode($staticLines[count($staticLines) - 1] ?? '', true);
+check(
+    is_array($staticDecoded) && ($staticDecoded['message'] ?? '') === 'Authentication failure: missing bearer token',
+    'ErrorLogger: static messages pass through unredacted'
+);
+
+// Context arrays are redacted before they reach disk.
+ErrorLogger::logEvent('warning', 'Payment callback rejected', $request, [
+    'order_id' => 42,
+    'password' => 'should-not-appear',
+]);
+$ctxLines = file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+$ctxDecoded = json_decode($ctxLines[count($ctxLines) - 1] ?? '', true);
+check(
+    is_array($ctxDecoded)
+    && ($ctxDecoded['context']['order_id'] ?? null) === 42
+    && ($ctxDecoded['context']['password'] ?? null) === '[redacted]',
+    'ErrorLogger: event context redacted, safe ids kept'
+);
+
+// Front-door id is shared by every later call in the same request.
+\App\Core\RequestContext::clear();
+$frontId = ErrorLogger::generateRequestId($request);
+\App\Core\RequestContext::set('request_id', $frontId);
+check(
+    ErrorLogger::currentRequestId($request) === $frontId
+    && ErrorLogger::currentRequestId(null) === $frontId,
+    'ErrorLogger: context id shared across calls in one request'
+);
+\App\Core\RequestContext::clear();
+
+// --- 4c. ErrorLogger rotation (naming + retention) --------------------------
+{
+    $rotate = new ReflectionMethod(ErrorLogger::class, 'rotateIfOversized');
+    $rotDir = sys_get_temp_dir() . '/lb-rotate-test-' . getmypid();
+    @mkdir($rotDir, 0777, true);
+    $rotLog = $rotDir . '/app-error.log';
+    @unlink($rotLog);
+    @unlink($rotLog . '.1');
+    @unlink($rotLog . '.2');
+
+    // Below threshold: untouched, no rotated file.
+    file_put_contents($rotLog, str_repeat('a', 50));
+    $rotate->invoke(null, $rotLog, 100);
+    check(is_file($rotLog) && !is_file($rotLog . '.1'), 'Rotate: below threshold leaves file alone');
+
+    // At threshold: current becomes EXACTLY app-error.log.1 (never .2).
+    file_put_contents($rotLog, str_repeat('b', 150));
+    $rotate->invoke(null, $rotLog, 100);
+    check(
+        !is_file($rotLog) && is_file($rotLog . '.1') && !is_file($rotLog . '.2')
+        && file_get_contents($rotLog . '.1') === str_repeat('b', 150),
+        'Rotate: oversized file becomes exactly app-error.log.1'
+    );
+
+    // Second rotation: previous .1 discarded — only the new .1 remains
+    // (the next log write recreates the current file).
+    file_put_contents($rotLog, str_repeat('c', 150));
+    $rotate->invoke(null, $rotLog, 100);
+    $kept = glob($rotDir . '/app-error.log*') ?: [];
+    check(
+        $kept === [$rotLog . '.1']
+        && file_get_contents($rotLog . '.1') === str_repeat('c', 150)
+        && !is_file($rotLog . '.2'),
+        'Rotate: retention is exactly current + .1, newest generation wins'
+    );
+    // Next write recreates current alongside .1 — still no .2, ever.
+    file_put_contents($rotLog, str_repeat('d', 10));
+    $keptAfterWrite = glob($rotDir . '/app-error.log*') ?: [];
+    sort($keptAfterWrite);
+    check(
+        $keptAfterWrite === [$rotLog, $rotLog . '.1'],
+        'Rotate: current + .1 coexist after the next write, no extra generations'
+    );
+
+    @unlink($rotLog);
+    @unlink($rotLog . '.1');
+    @unlink($rotLog . '.2');
+    @rmdir($rotDir);
+}
+
+// --- 4d. Migration failure privacy ------------------------------------------
+{
+    // Poisoned failure shaped exactly like MigrationRunner::applyFile emits,
+    // with secrets a real PDO message could plausibly carry.
+    $poison = new RuntimeException(
+        'Migration 003_will_fail.sql failed at statement 2 of 2: '
+        . "SQLSTATE[HY000]: General error password=hunter2 DB_PASS=s3cret "
+        . 'mysql:host=db.internal token=abc123 eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOjF9.sig-here'
+    );
+    $ctx = App\Core\MigrationRunner::failureContext($poison);
+    check(
+        ($ctx['file'] ?? '') === '003_will_fail.sql'
+        && ($ctx['statement'] ?? 0) === 2
+        && ($ctx['statements'] ?? 0) === 2,
+        'Migrate: failureContext extracts file + statement index only'
+    );
+    check(
+        App\Core\MigrationRunner::failureContext(new RuntimeException('Connection refused')) === [],
+        'Migrate: non-migration throwables yield empty context'
+    );
+
+    // Same call migrate.php makes: static message + parsed context. Redirect
+    // the logger at a scratch dir and prove no secret reaches the log line.
+    $refLog = new ReflectionClass(ErrorLogger::class);
+    $dirProp = $refLog->getProperty('directory');
+    $privDir = sys_get_temp_dir() . '/lb-migpriv-test-' . getmypid();
+    @mkdir($privDir, 0777, true);
+    $dirProp->setValue(null, $privDir);
+    try {
+        ErrorLogger::logEvent('warning', 'Migration failed', null, $ctx);
+        $privLines = file($privDir . '/app-error.log', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+        $privDecoded = json_decode($privLines[count($privLines) - 1] ?? '', true);
+        $privRaw = implode("\n", $privLines);
+        check(
+            is_array($privDecoded)
+            && ($privDecoded['message'] ?? '') === 'Migration failed'
+            && ($privDecoded['context']['file'] ?? '') === '003_will_fail.sql'
+            && ($privDecoded['context']['statement'] ?? 0) === 2,
+            'Migrate: structured log carries static message + safe metadata'
+        );
+        check(
+            !str_contains($privRaw, 'hunter2')
+            && !str_contains($privRaw, 's3cret')
+            && !str_contains($privRaw, 'db.internal')
+            && !str_contains($privRaw, 'abc123')
+            && !str_contains($privRaw, 'eyJhbGciOiJIUzI1NiJ9'),
+            'Migrate: secrets from the raw exception never reach the structured log'
+        );
+    } finally {
+        $dirProp->setValue(null, __DIR__ . '/../storage/logs');
+        foreach (glob($privDir . '/*') ?: [] as $f) {
+            @unlink($f);
+        }
+        @rmdir($privDir);
+    }
+
+    // CLI output keeps diagnostics but masks secrets.
+    $cli = App\Core\MigrationRunner::sanitizeCliMessage($poison->getMessage());
+    check(
+        str_contains($cli, '003_will_fail.sql') && str_contains($cli, 'statement 2 of 2'),
+        'Migrate: CLI message keeps filename + statement index'
+    );
+    check(
+        !str_contains($cli, 'hunter2') && !str_contains($cli, 's3cret')
+        && !str_contains($cli, 'db.internal') && !str_contains($cli, 'abc123'),
+        'Migrate: CLI message masks passwords, DSNs, and tokens'
+    );
+}
 
 // Restore prior log state (tests leave no residue).
 if ($hadLogFile) {

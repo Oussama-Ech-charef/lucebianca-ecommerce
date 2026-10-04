@@ -12,9 +12,30 @@ php api/tests/run-unit-tests.php
 Covers the pure core pieces: `Validator` rules, `CsrfProtection`
 (generate/validate/tamper/expiry), `Auth` JWT roundtrip + tampered/expired/
 foreign-secret rejection, `ErrorLogger` (required JSON fields,
-credential redaction, no stack traces), `MigrationRunner` SQL splitting
+credential redaction incl. recursive `redact()` for headers/bodies/arrays,
+request-id front-door sharing, no stack traces), `MigrationRunner` SQL splitting
 (comment-prefixed/quoted-semicolon/USE handling), and payment-initiation URL
 separation + request-hash coverage. Leaves no residue.
+
+## Test reports (both runners)
+
+Every run — pass, fail, or fatal — writes (gitignored, never committed):
+
+- `api/storage/test-reports/latest-report.json`
+- `api/storage/test-reports/latest-report.md`
+
+Failed runs additionally leave a timestamped copy
+(`unit-<UTC>.json/.md` or `api-<UTC>.json/.md`) in the same directory.
+Console output and exit codes are unchanged (reporting is a silent
+shutdown-hook that only creates files).
+
+Each report carries: command, UTC start/end, duration, environment (PHP
+version + test database NAME only — never host/user/password), totals
+(total/passed/failed/skipped), status, failed test names with safe
+messages, and a sanitized fatal line when applicable. Raw
+request/response bodies are excluded by design (they may carry tokens,
+emails, or customer data); failure labels are static strings, still
+passed through redaction before writing.
 
 ## Integration tests (isolated throwaway DB + real routes)
 
