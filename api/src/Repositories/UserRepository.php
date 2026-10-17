@@ -217,4 +217,51 @@ final class UserRepository extends Repository
         $stmt->bindValue(':id', $userId, \PDO::PARAM_INT);
         $stmt->execute();
     }
+
+    /**
+     * Paginate users ordered by creation date descending.
+     *
+     * @return array{items: array<int, array<string, mixed>>, total: int}
+     */
+    public function paginate(int $page, int $perPage): array
+    {
+        $stmt = $this->db->prepare('SELECT COUNT(*) FROM users');
+        $stmt->execute();
+        $total = (int) $stmt->fetchColumn();
+
+        $offset = ($page - 1) * $perPage;
+        $stmt = $this->db->prepare('
+            SELECT id, name, email, phone, email_verified, created_at
+            FROM users
+            ORDER BY created_at DESC
+            LIMIT :limit OFFSET :offset
+        ');
+        $stmt->bindValue(':limit', $perPage, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        $items = [];
+        while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+            $items[] = [
+                'id' => (int) $row['id'],
+                'name' => $row['name'],
+                'email' => $row['email'],
+                'phone' => $row['phone'],
+                'email_verified' => (int) $row['email_verified'],
+                'created_at' => $row['created_at'],
+            ];
+        }
+
+        return ['items' => $items, 'total' => $total];
+    }
+
+    /**
+     * Get total count of users.
+     */
+    public function countAll(): int
+    {
+        $stmt = $this->db->prepare('SELECT COUNT(*) FROM users');
+        $stmt->execute();
+        return (int) $stmt->fetchColumn();
+    }
 }

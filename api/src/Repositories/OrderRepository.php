@@ -491,4 +491,171 @@ final class OrderRepository extends Repository
 
         return $rows;
     }
+
+    /**
+     * Get realized sales and order count overview.
+     *
+     * @return array{total_sales: string, total_orders: int}
+     */
+    public function getSalesOverview(): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT COALESCE(SUM(total_amount), 0) as total_sales, COUNT(*) as total_orders
+            FROM orders
+            WHERE status != 'cancelled'
+              AND (
+                payment_status = 'paid'
+                OR (payment_method IN ('cod', 'whatsapp') AND status IN ('processing', 'shipped', 'delivered'))
+              )
+        ");
+        $stmt->execute();
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+        return [
+            'total_sales' => $row['total_sales'] ?? '0.00',
+            'total_orders' => (int) ($row['total_orders'] ?? 0),
+        ];
+    }
+
+    /**
+     * Get order count grouped by status.
+     *
+     * @return array<string, int>
+     */
+    public function getStatusBreakdown(): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT status, COUNT(*) as count
+            FROM orders
+            GROUP BY status
+        ");
+        $stmt->execute();
+
+        $breakdown = [];
+        while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+            $breakdown[$row['status']] = (int) $row['count'];
+        }
+
+        return $breakdown;
+    }
+
+    /**
+     * Get top-selling products by units sold from realized orders.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getTopSellingProducts(int $limit): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT
+                p.id,
+                p.name,
+                p.slug,
+                SUM(oi.quantity) as units_sold,
+                SUM(oi.quantity * oi.price_at_purchase) as revenue
+            FROM order_items oi
+            INNER JOIN product_variants pv ON oi.product_variant_id = pv.id
+            INNER JOIN products p ON pv.product_id = p.id
+            INNER JOIN orders o ON oi.order_id = o.id
+            WHERE o.status != 'cancelled'
+              AND (
+                o.payment_status = 'paid'
+                OR (o.payment_method IN ('cod', 'whatsapp') AND o.status IN ('processing', 'shipped', 'delivered'))
+              )
+            GROUP BY p.id, p.name, p.slug
+            ORDER BY units_sold DESC
+            LIMIT :limit
+        ");
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        $products = [];
+        while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+            $products[] = [
+                'id' => (int) $row['id'],
+                'name' => $row['name'],
+                'slug' => $row['slug'],
+                'units_sold' => (int) $row['units_sold'],
+                'revenue' => $row['revenue'],
+            ];
+        }
+
+        return $products;
+    }
+
+    /**
+     * Get recent orders for admin overview.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getRecent(int $limit): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT
+                id,
+                customer_name,
+                total_amount,
+                status,
+                payment_status,
+                payment_method,
+                created_at
+            FROM orders
+            ORDER BY created_at DESC
+            LIMIT :limit
+        ");
+        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        $orders = [];
+        while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+            $orders[] = [
+                'id' => (int) $row['id'],
+                'customer_name' => $row['customer_name'],
+                'total_amount' => $row['total_amount'],
+                'status' => $row['status'],
+                'payment_status' => $row['payment_status'],
+                'payment_method' => $row['payment_method'],
+                'created_at' => $row['created_at'],
+            ];
+        }
+
+        return $orders;
+    }
+
+    /**
+     * Get sales chart aggregated data for the last N days (realized orders).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getSalesChartData(int $days): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT
+                DATE(created_at) as date,
+                COUNT(*) as order_count,
+                SUM(total_amount) as daily_sales
+            FROM orders
+            WHERE status != 'cancelled'
+              AND (
+                payment_status = 'paid'
+                OR (payment_method IN ('cod', 'whatsapp') AND status IN ('processing', 'shipped', 'delivered'))
+              )
+              AND created_at >= DATE_SUB(CURDATE(), INTERVAL :days DAY)
+            GROUP BY DATE(created_at)
+            ORDER BY date ASC
+        ");
+        $stmt->bindValue(':days', $days, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        $chartData = [];
+        while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+            $chartData[] = [
+                'date' => $row['date'],
+                'order_count' => (int) $row['order_count'],
+                'sales' => $row['daily_sales'],
+            ];
+        }
+
+        return $chartData;
+    }
 }

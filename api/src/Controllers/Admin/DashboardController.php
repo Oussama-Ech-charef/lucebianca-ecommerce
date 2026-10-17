@@ -58,29 +58,13 @@ final class DashboardController extends Controller
      */
     private function getOverviewStats(): array
     {
-        $pdo = \App\Core\Database::get();
-
-        $stmt = $pdo->prepare("
-            SELECT COALESCE(SUM(total_amount), 0) as total_sales, COUNT(*) as total_orders
-            FROM orders
-            WHERE status != 'cancelled'
-              AND (
-                payment_status = 'paid'
-                OR (payment_method IN ('cod', 'whatsapp') AND status IN ('processing', 'shipped', 'delivered'))
-              )
-        ");
-        $stmt->execute();
-        $salesData = $stmt->fetch(\PDO::FETCH_ASSOC);
-
-        // Total customers
-        $stmt = $pdo->prepare("SELECT COUNT(*) as total_customers FROM users");
-        $stmt->execute();
-        $customerData = $stmt->fetch(\PDO::FETCH_ASSOC);
+        $salesData = $this->orders->getSalesOverview();
+        $totalCustomers = $this->users->countAll();
 
         return [
-            'total_sales' => $salesData['total_sales'] ?? '0.00',
-            'total_orders' => (int) ($salesData['total_orders'] ?? 0),
-            'total_customers' => (int) ($customerData['total_customers'] ?? 0),
+            'total_sales' => $salesData['total_sales'],
+            'total_orders' => $salesData['total_orders'],
+            'total_customers' => $totalCustomers,
         ];
     }
 
@@ -89,21 +73,7 @@ final class DashboardController extends Controller
      */
     private function getOrderStatusBreakdown(): array
     {
-        $pdo = \App\Core\Database::get();
-
-        $stmt = $pdo->prepare("
-            SELECT status, COUNT(*) as count
-            FROM orders
-            GROUP BY status
-        ");
-        $stmt->execute();
-
-        $breakdown = [];
-        while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
-            $breakdown[$row['status']] = (int) $row['count'];
-        }
-
-        return $breakdown;
+        return $this->orders->getStatusBreakdown();
     }
 
     /**
@@ -111,43 +81,7 @@ final class DashboardController extends Controller
      */
     private function getTopSellingProducts(int $limit): array
     {
-        $pdo = \App\Core\Database::get();
-
-        $stmt = $pdo->prepare("
-            SELECT
-                p.id,
-                p.name,
-                p.slug,
-                SUM(oi.quantity) as units_sold,
-                SUM(oi.quantity * oi.price_at_purchase) as revenue
-            FROM order_items oi
-            INNER JOIN product_variants pv ON oi.product_variant_id = pv.id
-            INNER JOIN products p ON pv.product_id = p.id
-            INNER JOIN orders o ON oi.order_id = o.id
-            WHERE o.status != 'cancelled'
-              AND (
-                o.payment_status = 'paid'
-                OR (o.payment_method IN ('cod', 'whatsapp') AND o.status IN ('processing', 'shipped', 'delivered'))
-              )
-            GROUP BY p.id, p.name, p.slug
-            ORDER BY units_sold DESC
-            LIMIT :limit
-        ");
-        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
-        $stmt->execute();
-
-        $products = [];
-        while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
-            $products[] = [
-                'id' => (int) $row['id'],
-                'name' => $row['name'],
-                'slug' => $row['slug'],
-                'units_sold' => (int) $row['units_sold'],
-                'revenue' => $row['revenue'],
-            ];
-        }
-
-        return $products;
+        return $this->orders->getTopSellingProducts($limit);
     }
 
     /**
@@ -155,38 +89,7 @@ final class DashboardController extends Controller
      */
     private function getRecentOrders(int $limit): array
     {
-        $pdo = \App\Core\Database::get();
-
-        $stmt = $pdo->prepare("
-            SELECT
-                id,
-                customer_name,
-                total_amount,
-                status,
-                payment_status,
-                payment_method,
-                created_at
-            FROM orders
-            ORDER BY created_at DESC
-            LIMIT :limit
-        ");
-        $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
-        $stmt->execute();
-
-        $orders = [];
-        while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
-            $orders[] = [
-                'id' => (int) $row['id'],
-                'customer_name' => $row['customer_name'],
-                'total_amount' => $row['total_amount'],
-                'status' => $row['status'],
-                'payment_status' => $row['payment_status'],
-                'payment_method' => $row['payment_method'],
-                'created_at' => $row['created_at'],
-            ];
-        }
-
-        return $orders;
+        return $this->orders->getRecent($limit);
     }
 
     /**
@@ -194,35 +97,6 @@ final class DashboardController extends Controller
      */
     private function getSalesChartData(int $days): array
     {
-        $pdo = \App\Core\Database::get();
-
-        $stmt = $pdo->prepare("
-            SELECT
-                DATE(created_at) as date,
-                COUNT(*) as order_count,
-                SUM(total_amount) as daily_sales
-            FROM orders
-            WHERE status != 'cancelled'
-              AND (
-                payment_status = 'paid'
-                OR (payment_method IN ('cod', 'whatsapp') AND status IN ('processing', 'shipped', 'delivered'))
-              )
-              AND created_at >= DATE_SUB(CURDATE(), INTERVAL :days DAY)
-            GROUP BY DATE(created_at)
-            ORDER BY date ASC
-        ");
-        $stmt->bindValue(':days', $days, \PDO::PARAM_INT);
-        $stmt->execute();
-
-        $chartData = [];
-        while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
-            $chartData[] = [
-                'date' => $row['date'],
-                'order_count' => (int) $row['order_count'],
-                'sales' => $row['daily_sales'],
-            ];
-        }
-
-        return $chartData;
+        return $this->orders->getSalesChartData($days);
     }
 }

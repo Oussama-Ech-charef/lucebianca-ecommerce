@@ -29,44 +29,15 @@ final class CustomersController extends Controller
         $page = max(1, (int) $request->query('page', 1));
         $perPage = min(100, max(1, (int) $request->query('per_page', 20)));
 
-        $pdo = \App\Core\Database::get();
-
-        // Count total
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM users");
-        $stmt->execute();
-        $total = (int) $stmt->fetchColumn();
-
-        // Fetch paginated
-        $offset = ($page - 1) * $perPage;
-        $stmt = $pdo->prepare("
-            SELECT id, name, email, phone, email_verified, created_at
-            FROM users
-            ORDER BY created_at DESC
-            LIMIT :limit OFFSET :offset
-        ");
-        $stmt->bindValue(':limit', $perPage, \PDO::PARAM_INT);
-        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
-        $stmt->execute();
-
-        $customers = [];
-        while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
-            $customers[] = [
-                'id' => (int) $row['id'],
-                'name' => $row['name'],
-                'email' => $row['email'],
-                'phone' => $row['phone'],
-                'email_verified' => (int) $row['email_verified'],
-                'created_at' => $row['created_at'],
-            ];
-        }
+        $result = $this->users->paginate($page, $perPage);
 
         $this->json([
-            'data' => $customers,
+            'data' => $result['items'],
             'meta' => [
                 'page' => $page,
                 'per_page' => $perPage,
-                'total' => $total,
-                'pages' => (int) ceil($total / $perPage),
+                'total' => $result['total'],
+                'pages' => (int) ceil($result['total'] / $perPage),
             ],
         ]);
     }
@@ -83,19 +54,10 @@ final class CustomersController extends Controller
             $this->error('Customer not found.', 404);
         }
 
-        // Get customer's orders
-        $pdo = \App\Core\Database::get();
-        $stmt = $pdo->prepare("
-            SELECT id, customer_name, total_amount, status, payment_status, payment_method, created_at
-            FROM orders
-            WHERE user_id = :user_id
-            ORDER BY created_at DESC
-        ");
-        $stmt->bindValue(':user_id', $id, \PDO::PARAM_INT);
-        $stmt->execute();
-
+        // Get customer's orders via repository
+        $userOrders = $this->orders->paginateForUser($id, 1, 100);
         $orders = [];
-        while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+        foreach ($userOrders['items'] as $row) {
             $orders[] = [
                 'id' => (int) $row['id'],
                 'customer_name' => $row['customer_name'],
