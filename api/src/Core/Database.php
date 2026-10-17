@@ -3,6 +3,7 @@
 namespace App\Core;
 
 use PDO;
+use PDOException;
 
 /**
  * Database (Singleton) — a single shared PDO connection.
@@ -62,7 +63,7 @@ final class Database
             ErrorLogger::logEvent('warning', 'Database connection failure', null, [
                 'exception' => $e::class,
             ]);
-            throw $e;
+            throw new \RuntimeException('Database connection failed. Please try again later.');
         }
 
         return self::$connection;

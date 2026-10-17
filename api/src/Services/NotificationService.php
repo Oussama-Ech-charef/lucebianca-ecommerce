@@ -133,8 +133,15 @@ final class NotificationService
             return $email;
         }
 
-        // TODO: When settings are implemented, read from settings table
-        // For now, return null if not in environment
+        try {
+            $settingEmail = $this->settings->get('store_email') ?? $this->settings->get('admin_email');
+            if ($settingEmail !== null && trim($settingEmail) !== '') {
+                return trim($settingEmail);
+            }
+        } catch (\Throwable) {
+            // fallback
+        }
+
         return null;
     }
 
@@ -158,6 +165,17 @@ final class NotificationService
      */
     public static function isEnabled(): bool
     {
-        return Env::get('ADMIN_EMAIL') !== null;
+        $envEmail = Env::get('ADMIN_EMAIL');
+        if ($envEmail !== null && $envEmail !== '') {
+            return true;
+        }
+
+        try {
+            $settings = new \App\Repositories\SettingsRepository();
+            $email = $settings->get('store_email') ?? $settings->get('admin_email');
+            return $email !== null && trim($email) !== '';
+        } catch (\Throwable) {
+            return false;
+        }
     }
 }

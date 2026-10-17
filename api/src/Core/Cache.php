@@ -36,7 +36,9 @@ final class Cache
             return null;
         }
 
-        $data = @unserialize(file_get_contents($file));
+        $data = @unserialize(file_get_contents($file), [
+            'allowed_classes' => [\App\Models\Product::class],
+        ]);
 
         if ($data === false || !is_array($data)) {
             return null;
