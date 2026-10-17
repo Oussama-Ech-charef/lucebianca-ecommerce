@@ -45,12 +45,12 @@ final class ProductRepository extends Repository
         }
 
         if (isset($filters['min_price']) && $filters['min_price'] !== '') {
-            $where[]              = 'p.base_price >= :min_price';
+            $where[]              = 'COALESCE(p.sale_price, p.base_price) >= :min_price';
             $params[':min_price'] = $filters['min_price'];
         }
 
         if (isset($filters['max_price']) && $filters['max_price'] !== '') {
-            $where[]              = 'p.base_price <= :max_price';
+            $where[]              = 'COALESCE(p.sale_price, p.base_price) <= :max_price';
             $params[':max_price'] = $filters['max_price'];
         }
 

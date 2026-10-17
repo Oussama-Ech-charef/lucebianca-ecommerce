@@ -2,6 +2,7 @@
 
 namespace App\Controllers\Admin;
 
+use App\Core\Cache;
 use App\Core\ConflictException;
 use App\Core\Database;
 use App\Core\Request;
@@ -35,6 +36,7 @@ final class ProductsController extends Controller
     private ProductVariantRepository $variants;
     private ProductImageRepository $images;
     private CategoryRepository $categories;
+    private Cache $cache;
 
     public function __construct()
     {
@@ -42,6 +44,7 @@ final class ProductsController extends Controller
         $this->variants   = new ProductVariantRepository();
         $this->images     = new ProductImageRepository();
         $this->categories = new CategoryRepository();
+        $this->cache      = new Cache();
         // CloudinaryService is created lazily inside uploadImages() so product
         // CRUD keeps working even if Cloudinary is down or misconfigured.
     }
@@ -263,6 +266,7 @@ final class ProductsController extends Controller
             $this->variants->listByProduct($productId)
         );
 
+        $this->cache->clear();
         $this->json(['data' => array_merge($product->toArray(), ['variants' => $variantRows])], 201);
     }
 
@@ -385,6 +389,7 @@ final class ProductsController extends Controller
         }
 
         $this->products->update($id, $fields);
+        $this->cache->clear();
 
         $updated = $this->products->findById($id);
         $this->json(['data' => $updated->toArray()]);
@@ -437,6 +442,7 @@ final class ProductsController extends Controller
         }
 
         $this->products->delete($id);
+        $this->cache->clear();
         $this->noContent();
     }
 
@@ -494,6 +500,7 @@ final class ProductsController extends Controller
             throw $e;
         }
 
+        $this->cache->clear();
         $variant = $this->variants->findById($id);
         $this->json(['data' => $variant->toArray()], 201);
     }
@@ -574,6 +581,7 @@ final class ProductsController extends Controller
             throw $e;
         }
 
+        $this->cache->clear();
         $updated = $this->variants->findById($id);
         $this->json(['data' => $updated->toArray()]);
     }
@@ -600,6 +608,7 @@ final class ProductsController extends Controller
         }
 
         $this->variants->delete($id);
+        $this->cache->clear();
         $this->noContent();
     }
 
@@ -708,6 +717,7 @@ final class ProductsController extends Controller
             ];
         }
 
+        $this->cache->clear();
         $this->json(['data' => ['product_id' => $id, 'images' => $inserted]], 201);
     }
 }

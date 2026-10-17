@@ -94,7 +94,7 @@ export const SOCIAL_LINKS = {
  * `free_shipping_threshold` and `supported regions` from `GET /api/settings/public`.
  * `frontend/src/app/shipping/page.tsx` currently shows this static list with a
  * “REASONABLE PLACEHOLDERS” banner. See `docs/decisions/2026-09-22-admin-settings.md`
- * — shipping is validated but not yet charged in `OrderService`.
+ * — shipping is charged in `OrderService` based on configured settings/fallbacks.
  */
 export const SHIPPING_FALLBACK = [
   { region: "Casablanca", cost: "25 MAD", time: "1–2 business days" },
