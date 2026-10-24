@@ -4,24 +4,51 @@ Scope: the single MySQL/MariaDB database `lucebianca` (InnoDB, `utf8mb4`)
 used by the PHP API. Credentials live in `api/.env` (`DB_HOST`, `DB_PORT`,
 `DB_NAME`, `DB_USER`, `DB_PASS`) — never copy them into scripts or docs.
 Schema source of truth: `database/migrations/*.sql`, applied in numeric
-order (there is **no** migrations-tracking table or runner yet — apply and
-verify manually).
+order and tracked in `schema_migrations` by `api/scripts/migrate.php`.
 
 ## 1. Backup
 
-The initial schema (14 tables) plus later migrations add customer PII:
+The current schema (19 tables, migrations through `021`) adds customer PII:
 `users` holds emails, phone numbers and password hashes; `orders` holds
 names, phones and addresses. Treat every dump as confidential.
 
-Full logical backup (safe on live InnoDB tables — consistent snapshot,
-no blocking):
+### Automated script (recommended)
+
+`api/scripts/backup-db.php` creates a gzip dump in `backups/` (gitignored)
+using the same `DB_*` credentials as the API:
+
+```bash
+php api/scripts/backup-db.php
+```
+
+What it does / guarantees:
+- Streams `mysqldump --single-transaction --quick` into gzip; the completed
+  file is `lucebianca_YYYYmmdd_HHMMSS.sql.gz`, renamed from `.tmp` only on
+  success.
+- Passes credentials through a temporary `0600` MySQL defaults-extra-file,
+  removed afterwards — passwords never appear in process arguments.
+- Uses a non-blocking lock (`.backup-db.lock`) so overlapping cron/manual
+  runs cannot corrupt each other.
+- Prunes **only generated dumps** matching
+  `lucebianca_YYYYmmdd_HHMMSS.sql.gz` older than
+  `DB_BACKUP_RETENTION_DAYS` (default 30; `0` keeps forever). Existing
+  manually named files in `backups/` are never touched.
+- Optional settings in `api/.env`: `MYSQLDUMP_BIN`, `DB_BACKUP_DIR`
+  (relative paths resolve from the repo root),
+  `DB_BACKUP_RETENTION_DAYS`.
+
+Exit code `0` = success (or another run holds the lock), `1` = failure.
+Generated dumps are gitignored by the existing `backups/` rule — never
+commit them.
+
+### Manual fallback
 
 ```bash
 mysqldump \
   --host=<DB_HOST> --port=<DB_PORT> --user=<DB_USER> -p \
   --single-transaction --quick \
   --default-character-set=utf8mb4 \
-  lucebianca | gzip > "lucebianca-$(date +%Y%m%d-%H%M%S).sql.gz"
+  lucebianca | gzip > "lucebianca_$(date +%Y%m%d_%H%M%S).sql.gz"
 ```
 
 Notes:
@@ -32,16 +59,24 @@ Notes:
 
 ### Schedule (example — no scheduler ships in this repo)
 
-Install on the DB host yourself, e.g. cron:
+Install on the DB host or API host yourself, e.g. cron:
 
 ```cron
-15 3 * * *   <daily full dump as above>
-30 3 * * 0   <weekly dump, kept separately>
+15 3 * * *   cd /path/to/lucebianca && mkdir -p api/storage/logs && php api/scripts/backup-db.php >> api/storage/logs/backup.log 2>&1
 ```
 
-Recommended retention: dailies 14 days · weeklies 8 weeks · monthlies 12
-months. Prune with a small script (`find <backupdir> -name '*.sql.gz' -mtime +14 -delete`
-per tier) rather than keeping one flat pile.
+If the API host is Windows, create a Task Scheduler task that starts
+`cmd.exe` with arguments
+`/c "C:\path\to\php.exe C:\path\to\lucebianca\api\scripts\backup-db.php >> C:\path\to\lucebianca\api\storage\logs\backup.log 2>&1"`
+and uses the repository root as its working directory. No scheduler task is
+installed by this repository; installation and monitoring remain deployment
+steps.
+
+The script's built-in retention (default 30 days) covers daily dumps. For a
+longer archive, copy a dump off-machine before it ages out, or set a larger
+`DB_BACKUP_RETENTION_DAYS`. Do not point another prune command at `backups/`
+unless it matches the generated filename pattern — the folder may contain
+manual backups that must be preserved.
 
 ### Off-machine storage & encryption
 
@@ -66,8 +101,9 @@ that has never been restored is a hypothesis.
 
 | Item | Location |
 |---|---|
-| Schema migrations (apply in order) | `database/migrations/001…009_*.sql` |
-| Fresh-setup full snapshot (= 001 + USE line) | `database/schema.sql` |
+| Schema migrations (apply in order) | `database/migrations/001…021_*.sql` |
+| Fresh-setup full snapshot (all tables + columns) | `database/schema.sql` |
+| Generated + manual database dumps (gitignored) | `backups/` |
 | API DB credentials | `api/.env` |
 | App-level error log (not DB) | `api/storage/logs/app-error.log` |
 
@@ -90,10 +126,15 @@ that has never been restored is a hypothesis.
 4. **Verify the scratch copy**:
 
    ```sql
-   SHOW TABLES;                          -- expected: same table list as prod
+   SHOW TABLES;                          -- expected: same 19-table list as prod
    SELECT COUNT(*) FROM users;
    SELECT COUNT(*) FROM orders;          -- compare against known values
    SELECT COUNT(*) FROM product_variants;
+   SELECT COUNT(*) FROM schema_migrations; -- compare with source of truth
+   -- Expected 3 for a schema that includes migration 021:
+   SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders'
+      AND COLUMN_NAME IN ('coupon_id','coupon_code','discount_amount');
    ```
 
 5. **Swap**: drop/rename the broken schema and rename the restored one in
