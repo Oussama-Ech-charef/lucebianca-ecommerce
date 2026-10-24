@@ -11,7 +11,7 @@ php api/tests/run-unit-tests.php
 
 Covers the pure core pieces: `Validator` rules, `CsrfProtection`
 (generate/validate/tamper/expiry), `Auth` JWT roundtrip + tampered/expired/
-foreign-secret rejection, `ErrorLogger` (required JSON fields,
+foreign-secret rejection + optional admin session (`sid`) claim, `ErrorLogger` (required JSON fields,
 credential redaction incl. recursive `redact()` for headers/bodies/arrays,
 request-id front-door sharing, no stack traces), `MigrationRunner` SQL splitting
 (comment-prefixed/quoted-semicolon/USE handling), and payment-initiation URL
@@ -44,18 +44,24 @@ php api/tests/run-api-tests.php
 ```
 
 Boots the real API on a random local port (`127.0.0.1`) against an
-isolated MySQL database `lucebianca_test`, rebuilt from
+isolated MySQL database `lucebianca_test`, rebuilt from the current
 `database/schema.sql` snapshot (19 tables, deterministic, includes `015`
-`lookup_token` and drift repairs) on every run. The developer database is never
-touched: the runner accepts only `lucebianca_test` or a name with the
-`lucebianca_test_` prefix, then rewrites the snapshot's hard-coded
-`USE lucebianca;` / `CREATE DATABASE` directives in memory. It hard-fails if
-a future snapshot introduces any other production-DB reference. Migration files
-`001…015` are **not** executed by this harness (010 has a known duplicate-column
-conflict after 008, 014/015 are `UNTESTED` with `INFORMATION_SCHEMA+PREPARE`); see
-`database/migrations/README.md` two-path docs. `MigrationRunner` itself is
+`lookup_token`, the `021` order coupon columns/index/FK, and drift repairs) on
+every run. The developer database is never touched: the runner accepts only
+`lucebianca_test` or a name with the `lucebianca_test_` prefix, then rewrites
+the snapshot's hard-coded `USE lucebianca;` / `CREATE DATABASE` directives in
+memory. It hard-fails if a future snapshot introduces any other production-DB
+reference, and aborts before booting if the 021 coupon columns, index, or
+`ON DELETE SET NULL` FK are missing.
+
+Migration files `001…021` are **not replayed** against this database because the
+snapshot already contains their final effects (010 has a known duplicate-column
+conflict after 008; 014/015 are `UNTESTED` with `INFORMATION_SCHEMA+PREPARE`);
+see `database/migrations/README.md` two-path docs. `MigrationRunner` itself is
 covered separately against throwaway `lucebianca_test_migrate_*` databases
-(dry-run purity, failure non-recording, checksum drift, baseline adoption).
+(dry-run purity, failure non-recording, checksum drift, baseline adoption), and
+021 is applied to a pre-021 scratch schema to verify its three columns, index,
+snapshot preservation on coupon deletion, and idempotent re-run.
 
 Connection defaults are copied from `api/.env`; override with environment
 variables if needed: `LB_TEST_DB_HOST`, `LB_TEST_DB_PORT`,
@@ -73,6 +79,14 @@ or external service is involved.
   wishlist add/list/remove; review submit/validation errors
 - customer auth/session: register, duplicate 409, generic 401 login message,
   account access with/without/garbage token, refresh rotation (reuse → 401)
+- live product search across name/description/category with escaped wildcards
+- coupons: admin CRUD + expiry parsing (valid, leap day, impossible date,
+  malformed, past/future boundary), public preview totals/errors, the preview
+  rate limit (20 allowed, 21st → 429 + `Retry-After`), order snapshots,
+  stock/totals, and FK `SET NULL` snapshot preservation
+- admin accounts/sessions: CRUD, self-delete and last-admin guards (including
+  concurrent cross-deletion in an isolated scratch DB), password-change
+  invalidation of both old access and refresh tokens, then normal re-login
 - guest checkout email flow: order stores email with NULL user_id,
   authoritative pricing, stock decrement verified via POST /api/cart,
   logged-in order attribution, conflict/validation responses
@@ -82,7 +96,10 @@ or external service is involved.
   after cancel (stock asserted via cart validation throughout)
 - migration runner: dry-run purity (no tracking table created), failure names
   file + statement index without recording, repair + re-run, checksum drift,
-  baseline adoption, manual-migration detection (scratch `migrate_*` DBs)
+  baseline adoption, manual-migration detection, and 021 apply/idempotence
+  (scratch `migrate_*` DBs)
+- backup script: gzip dump, generated-file retention, manual-file preservation,
+  missing-binary failure, and credential-safe output
 - newsletter email flow: welcome best-effort with empty mailer key, no token
   in subscribe response, read-only GET verify, POST-only unsubscribe,
   audit counter single-increment, email-bound tokens
@@ -96,6 +113,7 @@ or external service is involved.
 - Card-gateway tests use throwaway CMI secrets (`test-*`, test database
   only) to craft correctly-signed callbacks — no production credentials,
   no real gateway traffic.
-- Frontend browser E2E is not automated in this repo (no Playwright config /
-  browsers installed); past storefront QA was manual per-phase — see
-  docs/decisions/.
+- Frontend browser E2E is not automated in this repo (no Playwright config or
+  bundled browser binaries; ad-hoc checks can drive an installed system
+  browser through `playwright-core`); past storefront QA was manual
+  per-phase — see docs/decisions/.

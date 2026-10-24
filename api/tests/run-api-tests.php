@@ -368,6 +368,39 @@ do {
 $statement->closeCursor();
 echo "Schema ready (snapshot: database/schema.sql, 19 tables)\n";
 
+// The integration suite must exercise the CURRENT schema contract, including
+// migration 021. Fail before booting the server if the snapshot regresses.
+$schemaCount = static function (string $sql, array $params) use ($adminPdo): int {
+    $stmt = $adminPdo->prepare($sql);
+    $stmt->execute($params);
+    $count = (int) $stmt->fetchColumn();
+    $stmt->closeCursor();
+    return $count;
+};
+$couponColumnCount = $schemaCount(
+    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'orders'
+        AND COLUMN_NAME IN ('coupon_id','coupon_code','discount_amount')",
+    [$dbName]
+);
+$couponIndexCount = $schemaCount(
+    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'orders'
+        AND INDEX_NAME = 'idx_orders_coupon'",
+    [$dbName]
+);
+$couponFkCount = $schemaCount(
+    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS
+      WHERE CONSTRAINT_SCHEMA = ? AND TABLE_NAME = 'orders'
+        AND CONSTRAINT_NAME = 'fk_orders_coupon' AND DELETE_RULE = 'SET NULL'",
+    [$dbName]
+);
+if ($couponColumnCount !== 3 || $couponIndexCount < 1 || $couponFkCount !== 1) {
+    fwrite(STDERR, "Test schema is missing migration 021 coupon columns/index/FK.\n");
+    exit(1);
+}
+echo "Schema includes migration 021 coupon columns, index and ON DELETE SET NULL FK\n";
+
 // --- 4. Seed minimal deterministic data ----------------------------------
 $pdo = new PDO(
     "mysql:host={$dbHost};port={$dbPort};dbname={$dbName};charset=utf8mb4",
@@ -1486,6 +1519,830 @@ foreach (glob($fxBase . '/*/*.sql') ?: [] as $f) {
 @rmdir($fxBase . '/with-failure');
 @rmdir($fxBase . '/adopt');
 @rmdir($fxBase);
+
+// --- Migration 021 isolated apply (scratch test DB only) -------------------
+// The main test database already comes from database/schema.sql (which
+// includes 021), so this exercises the migration itself against a minimal
+// pre-021 schema: columns, index, FK behaviour and idempotent re-runs.
+$scratch021 = $mkScratchDb('migrate_coupon021');
+$scratch021->exec(
+    "CREATE TABLE coupons (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        code VARCHAR(40) NOT NULL,
+        discount_type ENUM('percentage','fixed') NOT NULL,
+        discount_value DECIMAL(10,2) NOT NULL,
+        expires_at DATETIME NULL,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        UNIQUE KEY uq_coupons_code (code)
+     ) ENGINE=InnoDB"
+);
+$scratch021->exec(
+    "CREATE TABLE orders (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        shipping_cost DECIMAL(10,2) NOT NULL DEFAULT 0.00
+     ) ENGINE=InnoDB"
+);
+$migration021Dir = sys_get_temp_dir() . '/lb-migrate-021-' . getmypid() . '-' . bin2hex(random_bytes(3));
+mkdir($migration021Dir, 0777, true);
+copy($repoRoot . '/database/migrations/021_add_orders_coupon_fields.sql', $migration021Dir . '/021_add_orders_coupon_fields.sql');
+$runner021 = new App\Core\MigrationRunner($scratch021, $migration021Dir);
+$pending021 = array_column($runner021->pending(), 'name');
+check($pending021 === ['021_add_orders_coupon_fields.sql'], 'migration 021 is pending on a pre-021 scratch schema');
+check($runner021->migrate() === ['021_add_orders_coupon_fields.sql'], 'migration 021 applies cleanly to a pre-021 scratch schema');
+$colCount021 = (int) $scratch021->query(
+    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders'
+        AND COLUMN_NAME IN ('coupon_id','coupon_code','discount_amount')"
+)->fetchColumn();
+check($colCount021 === 3, 'migration 021 adds the three order coupon columns');
+$index021 = (int) $scratch021->query(
+    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND INDEX_NAME = 'idx_orders_coupon'"
+)->fetchColumn();
+check($index021 > 0, 'migration 021 adds the coupon index');
+$fk021 = $scratch021->query(
+    "SELECT DELETE_RULE FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS
+      WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'orders'
+        AND CONSTRAINT_NAME = 'fk_orders_coupon'"
+)->fetchColumn();
+check($fk021 === 'SET NULL', 'migration 021 adds the FK with ON DELETE SET NULL');
+$scratch021->exec("INSERT INTO coupons (code, discount_type, discount_value) VALUES ('MIG21', 'fixed', '10.00')");
+$scratch021->exec("INSERT INTO orders (shipping_cost, coupon_id, coupon_code, discount_amount) VALUES ('0.00', 1, 'MIG21', '10.00')");
+$scratch021->exec('DELETE FROM coupons WHERE id = 1');
+$migratedRow021 = $scratch021->query('SELECT coupon_id, coupon_code, discount_amount FROM orders WHERE id = 1')->fetch(PDO::FETCH_ASSOC);
+check(
+    $migratedRow021 !== false && $migratedRow021['coupon_id'] === null
+        && $migratedRow021['coupon_code'] === 'MIG21' && (string) $migratedRow021['discount_amount'] === '10.00',
+    'migration 021 FK preserves the order snapshot on coupon deletion'
+);
+check($runner021->migrate() === [] && $runner021->pending() === [], 'migration 021 is idempotent (re-run is a no-op)');
+$adminPdo->exec('DROP DATABASE IF EXISTS `' . $dbName . '_migrate_coupon021`');
+@unlink($migration021Dir . '/021_add_orders_coupon_fields.sql');
+@rmdir($migration021Dir);
+
+// --- Live search (public /api/products?search=) ----------------------------
+// Each run uses a random token so the (persistent) product-list cache can
+// never serve a stale fixture from an earlier run. The token appears in the
+// product name, description and category name — all three must match.
+$searchToken = 'Zq' . bin2hex(random_bytes(4));
+[, , $csrfSearch] = httpRequest('GET', '/api/csrf-token');
+$csrfSearchH = ['X-CSRF-Token' => $csrfSearch['csrf_token'] ?? ''];
+
+[$status, , $searchCategory] = httpRequest('POST', '/api/admin/categories', [
+    'name' => 'Search ' . $searchToken,
+], $adminToken + $csrfSearchH);
+$searchCategoryId = (int) ($searchCategory['data']['id'] ?? 0);
+check($status === 201 && $searchCategoryId > 0, 'search fixture category created');
+
+[$status, , $searchProduct] = httpRequest('POST', '/api/admin/products', [
+    'name' => 'Aurora ' . $searchToken,
+    'description' => 'Signature ' . $searchToken . ' weave',
+    'base_price' => '120.00',
+    'category_id' => $searchCategoryId,
+    'is_active' => 1,
+    'meta_title' => 'Search fixture',
+    'meta_description' => 'Search fixture description',
+    'variants' => [
+        ['size' => 'M', 'color' => 'Black', 'sku' => 'SEARCH-' . $searchToken . '-M', 'price' => '', 'stock_quantity' => '12'],
+    ],
+], $adminToken + $csrfSearchH);
+$searchProductId = (int) ($searchProduct['data']['id'] ?? 0);
+$searchVariantId = (int) ($searchProduct['data']['variants'][0]['id'] ?? 0);
+check($status === 201 && $searchProductId > 0 && $searchVariantId > 0, 'search fixture product created');
+
+$searchIds = static function (array $body): array {
+    return array_map('intval', array_column($body['data'] ?? [], 'id'));
+};
+[$status, , $byName] = httpRequest('GET', '/api/products?per_page=50&search=' . urlencode($searchToken));
+check(
+    $status === 200 && in_array($searchProductId, $searchIds($byName), true),
+    'search matches the product name (case-insensitive via collation)'
+);
+[$status, , $byNameUpper] = httpRequest('GET', '/api/products?per_page=50&search=' . urlencode(strtoupper($searchToken)));
+check(
+    $status === 200 && in_array($searchProductId, $searchIds($byNameUpper), true),
+    'search is case-insensitive'
+);
+[$status, , $byDescription] = httpRequest('GET', '/api/products?per_page=50&search=' . urlencode('signature ' . strtolower($searchToken)));
+check(
+    $status === 200 && in_array($searchProductId, $searchIds($byDescription), true),
+    'search matches the product description'
+);
+[$status, , $byCategory] = httpRequest('GET', '/api/products?per_page=50&search=' . urlencode('Search ' . $searchToken));
+check(
+    $status === 200 && in_array($searchProductId, $searchIds($byCategory), true),
+    'search matches the category name'
+);
+[$status, , $noMatch] = httpRequest('GET', '/api/products?per_page=50&search=' . urlencode($searchToken . '-absent'));
+check($status === 200 && (int) ($noMatch['meta']['total'] ?? -1) === 0, 'search with no match returns an empty page');
+[$status, , $literalWildcard] = httpRequest('GET', '/api/products?per_page=50&search=' . urlencode('%'));
+check(
+    $status === 200 && (int) ($literalWildcard['meta']['total'] ?? -1) === 0,
+    'search treats % as a literal character (no SQL wildcard)'
+);
+
+// --- Coupons: admin CRUD, public preview, order persistence ----------------
+[$status, , $couponProduct] = httpRequest('POST', '/api/admin/products', [
+    'name' => 'Coupon Fixture Tee',
+    'base_price' => '100.00',
+    'is_active' => 1,
+    'meta_title' => 'Coupon fixture',
+    'meta_description' => 'Coupon fixture description',
+    'variants' => [
+        ['size' => 'M', 'color' => 'Black', 'sku' => 'COUPON-M-BLK', 'price' => '', 'stock_quantity' => '20'],
+    ],
+], $adminToken + $csrfSearchH);
+$couponProductId = (int) ($couponProduct['data']['id'] ?? 0);
+$couponVariantId = (int) ($couponProduct['data']['variants'][0]['id'] ?? 0);
+check($status === 201 && $couponProductId > 0 && $couponVariantId > 0, 'coupon fixture product created (100.00 x 20 stock)');
+
+// Validation: codes are normalized to uppercase, percentage is bounded.
+[$status, , $pctCoupon] = httpRequest('POST', '/api/admin/coupons', [
+    'code' => '  save10  ',
+    'discount_type' => 'percentage',
+    'discount_value' => '10',
+], $adminToken + $csrfSearchH);
+$pctCouponId = (int) ($pctCoupon['data']['id'] ?? 0);
+check(
+    $status === 201 && $pctCouponId > 0 && ($pctCoupon['data']['code'] ?? '') === 'SAVE10'
+        && ($pctCoupon['data']['discount_value'] ?? '') === '10.00' && ($pctCoupon['data']['is_active'] ?? 0) === 1,
+    'coupon create normalizes the code + stores the value'
+);
+[$status, , ] = httpRequest('POST', '/api/admin/coupons', [
+    'code' => 'save10', 'discount_type' => 'percentage', 'discount_value' => '5',
+], $adminToken + $csrfSearchH);
+check($status === 409, 'duplicate coupon code (case-insensitive) -> 409');
+[$status, , $body] = httpRequest('POST', '/api/admin/coupons', [
+    'code' => 'bad code!', 'discount_type' => 'percentage', 'discount_value' => '5',
+], $adminToken + $csrfSearchH);
+check($status === 422 && isset($body['errors']['code']), 'coupon code with invalid characters -> 422');
+[$status, , $body] = httpRequest('POST', '/api/admin/coupons', [
+    'code' => 'TOOBIG', 'discount_type' => 'percentage', 'discount_value' => '100.01',
+], $adminToken + $csrfSearchH);
+check($status === 422 && isset($body['errors']['discount_value']), 'percentage coupon above 100 -> 422');
+[$status, , $body] = httpRequest('POST', '/api/admin/coupons', [
+    'code' => 'ZERO', 'discount_type' => 'fixed', 'discount_value' => '0',
+], $adminToken + $csrfSearchH);
+check($status === 422 && isset($body['errors']['discount_value']), 'fixed coupon at 0 -> 422');
+[$status, , $body] = httpRequest('POST', '/api/admin/coupons', [
+    'code' => 'BADEXP', 'discount_type' => 'fixed', 'discount_value' => '5', 'expires_at' => 'not-a-date',
+], $adminToken + $csrfSearchH);
+check($status === 422 && isset($body['errors']['expires_at']), 'coupon malformed expiry -> 422');
+[$status, , $body] = httpRequest('POST', '/api/admin/coupons', [
+    'code' => 'IMPOSSIBLE', 'discount_type' => 'fixed', 'discount_value' => '5',
+    'expires_at' => '2026-02-30T10:00',
+], $adminToken + $csrfSearchH);
+$impossibleRowCount = (int) $pdo->query("SELECT COUNT(*) FROM coupons WHERE code = 'IMPOSSIBLE'")->fetchColumn();
+check(
+    $status === 422 && isset($body['errors']['expires_at']) && $impossibleRowCount === 0,
+    'coupon impossible calendar date (Feb 30) -> 422 and nothing is stored'
+);
+[$status, , $leapCoupon] = httpRequest('POST', '/api/admin/coupons', [
+    'code' => 'LEAPDAY', 'discount_type' => 'fixed', 'discount_value' => '5',
+    'expires_at' => '2028-02-29T00:00',
+], $adminToken + $csrfSearchH);
+check(
+    $status === 201 && ($leapCoupon['data']['expires_at'] ?? '') === '2028-02-29 00:00:00',
+    'coupon valid leap-day expiry is preserved exactly'
+);
+
+$expiryFuture = new DateTimeImmutable('+10 minutes', new DateTimeZone('Africa/Casablanca'));
+$expiryFutureValue = $expiryFuture->format('Y-m-d\TH:i');
+$expiryFutureStored = $expiryFuture->format('Y-m-d H:i') . ':00';
+[$status, , $boundaryCoupon] = httpRequest('POST', '/api/admin/coupons', [
+    'code' => 'BOUNDARY', 'discount_type' => 'fixed', 'discount_value' => '5',
+    'expires_at' => $expiryFutureValue,
+], $adminToken + $csrfSearchH);
+$boundaryCouponId = (int) ($boundaryCoupon['data']['id'] ?? 0);
+check(
+    $status === 201 && $boundaryCouponId > 0
+        && ($boundaryCoupon['data']['expires_at'] ?? '') === $expiryFutureStored,
+    'coupon future expiry boundary is stored and active'
+);
+
+[$status, , $fixedCoupon] = httpRequest('POST', '/api/admin/coupons', [
+    'code' => 'FIXED25', 'discount_type' => 'fixed', 'discount_value' => '25',
+], $adminToken + $csrfSearchH);
+$fixedCouponId = (int) ($fixedCoupon['data']['id'] ?? 0);
+check($status === 201 && $fixedCouponId > 0, 'fixed coupon created');
+
+[$status, , $capCoupon] = httpRequest('POST', '/api/admin/coupons', [
+    'code' => 'CAP500', 'discount_type' => 'fixed', 'discount_value' => '500',
+], $adminToken + $csrfSearchH);
+$capCouponId = (int) ($capCoupon['data']['id'] ?? 0);
+check($status === 201 && $capCouponId > 0, 'large fixed coupon created (discount must cap at subtotal)');
+
+[$status, , $expiredCoupon] = httpRequest('POST', '/api/admin/coupons', [
+    'code' => 'EXPIRED10', 'discount_type' => 'percentage', 'discount_value' => '10',
+    'expires_at' => '2020-01-01T00:00',
+], $adminToken + $csrfSearchH);
+$expiredCouponId = (int) ($expiredCoupon['data']['id'] ?? 0);
+check($status === 201 && $expiredCouponId > 0, 'expired coupon fixture created');
+
+[$status, , $inactiveCoupon] = httpRequest('POST', '/api/admin/coupons', [
+    'code' => 'INACTIVE20', 'discount_type' => 'percentage', 'discount_value' => '20',
+    'is_active' => false,
+], $adminToken + $csrfSearchH);
+$inactiveCouponId = (int) ($inactiveCoupon['data']['id'] ?? 0);
+check(
+    $status === 201 && $inactiveCouponId > 0 && ($inactiveCoupon['data']['is_active'] ?? 1) === 0,
+    'inactive coupon fixture created'
+);
+
+// Preview is authoritative: price is resolved server-side from the variant.
+$couponItems = [['variant_id' => $couponVariantId, 'quantity' => 2]];
+[$status, , $preview] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'save10', 'items' => $couponItems,
+], $csrfSearchH);
+check(
+    $status === 200
+        && ($preview['data']['code'] ?? '') === 'SAVE10'
+        && ($preview['data']['subtotal_amount'] ?? '') === '200.00'
+        && ($preview['data']['discount_amount'] ?? '') === '20.00'
+        && ($preview['data']['shipping_cost'] ?? '') === '0.00'
+        && ($preview['data']['total_amount'] ?? '') === '180.00',
+    'coupon preview applies 10% to the server-resolved subtotal'
+);
+
+// Expiry boundary: a future timestamp is usable; once it is moved into the
+// past the same coupon is rejected by the authoritative preview.
+[$status, , $boundaryPreview] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'BOUNDARY', 'items' => $couponItems,
+], $csrfSearchH);
+check(
+    $status === 200 && ($boundaryPreview['data']['discount_amount'] ?? '') === '5.00',
+    'coupon with a future expiry boundary is accepted'
+);
+[$status] = httpRequest('PUT', "/api/admin/coupons/{$boundaryCouponId}", [
+    'expires_at' => '2020-01-01T00:00',
+], $adminToken + $csrfSearchH);
+check($status === 200, 'coupon expiry boundary can be moved into the past');
+[$status, , $body] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'BOUNDARY', 'items' => $couponItems,
+], $csrfSearchH);
+check(
+    $status === 422 && isset($body['errors']['coupon_code']),
+    'coupon past expiry boundary is rejected'
+);
+
+[$status, , $previewFixed] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'FIXED25', 'items' => [['variant_id' => $couponVariantId, 'quantity' => 1]],
+], $csrfSearchH);
+check(
+    $status === 200 && ($previewFixed['data']['discount_amount'] ?? '') === '25.00'
+        && ($previewFixed['data']['total_amount'] ?? '') === '75.00',
+    'fixed coupon preview subtracts the fixed amount'
+);
+
+[$status, , $previewCap] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'CAP500', 'items' => [['variant_id' => $couponVariantId, 'quantity' => 1]],
+], $csrfSearchH);
+check(
+    $status === 200 && ($previewCap['data']['discount_amount'] ?? '') === '100.00'
+        && ($previewCap['data']['total_amount'] ?? '') === '0.00',
+    'coupon discount is capped at the merchandise subtotal (never negative)'
+);
+
+// Shipping uses the PRE-discount subtotal: 200 >= 150 stays free even though
+// the coupon reduces the merchandise to 180.
+[$status] = httpRequest('PUT', '/api/admin/settings', [
+    'shipping_cost' => '30.00', 'free_shipping_threshold' => '150.00',
+], $adminToken + $csrfSearchH);
+check($status === 200, 'coupon suite sets shipping 30 + threshold 150');
+[$status, , $previewThreshold] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'SAVE10', 'items' => $couponItems,
+], $csrfSearchH);
+check(
+    $status === 200 && ($previewThreshold['data']['shipping_cost'] ?? '') === '0.00'
+        && ($previewThreshold['data']['total_amount'] ?? '') === '180.00',
+    'free-shipping threshold uses the pre-discount subtotal'
+);
+
+[$status] = httpRequest('PUT', '/api/admin/settings', [
+    'shipping_cost' => '30.00', 'free_shipping_threshold' => '500.00',
+], $adminToken + $csrfSearchH);
+check($status === 200, 'coupon suite sets shipping 30 + threshold 500');
+[$status, , $previewShipping] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'SAVE10', 'items' => $couponItems,
+], $csrfSearchH);
+check(
+    $status === 200 && ($previewShipping['data']['shipping_cost'] ?? '') === '30.00'
+        && ($previewShipping['data']['total_amount'] ?? '') === '210.00',
+    'coupon never discounts shipping (200 - 20 + 30 = 210)'
+);
+
+// Invalid codes / carts are rejected with field-level errors.
+[$status, , $body] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'INACTIVE20', 'items' => $couponItems,
+], $csrfSearchH);
+check($status === 422 && isset($body['errors']['coupon_code']), 'inactive coupon preview -> 422');
+[$status, , $body] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'EXPIRED10', 'items' => $couponItems,
+], $csrfSearchH);
+check($status === 422 && isset($body['errors']['coupon_code']), 'expired coupon preview -> 422');
+[$status, , $body] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'DOES-NOT-EXIST', 'items' => $couponItems,
+], $csrfSearchH);
+check($status === 422 && isset($body['errors']['coupon_code']), 'unknown coupon preview -> 422');
+[$status, , $body] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => '', 'items' => $couponItems,
+], $csrfSearchH);
+check($status === 422 && isset($body['errors']['code']), 'empty coupon code -> 422');
+[$status, , $body] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'SAVE10',
+], $csrfSearchH);
+check($status === 422 && isset($body['errors']['items']), 'coupon preview without items -> 422');
+[$status, , ] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'SAVE10', 'items' => [['variant_id' => 999999, 'quantity' => 1]],
+], $csrfSearchH);
+check($status === 409, 'coupon preview with an unavailable line -> 409');
+[$status, , ] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'SAVE10', 'items' => $couponItems,
+]);
+check($status === 403, 'coupon preview without CSRF -> 403');
+
+// Order placement recomputes the coupon inside the transaction and snapshots
+// the code + discount. Lowercase input is accepted (lookup is collation-based).
+[$status, , $couponOrder] = httpRequest('POST', '/api/orders', array_merge($orderPayload, [
+    'email' => 'coupon-buyer@example.com',
+    'coupon_code' => 'save10',
+    'items' => $couponItems,
+]), $csrfSearchH);
+$couponOrderId = (int) ($couponOrder['data']['id'] ?? 0);
+$couponOrderToken = (string) ($couponOrder['data']['lookup_token'] ?? '');
+check(
+    $status === 201 && $couponOrderId > 0
+        && ($couponOrder['data']['coupon_id'] ?? 0) === $pctCouponId
+        && ($couponOrder['data']['coupon_code'] ?? '') === 'SAVE10'
+        && ($couponOrder['data']['discount_amount'] ?? '') === '20.00'
+        && ($couponOrder['data']['subtotal_amount'] ?? '') === '200.00'
+        && ($couponOrder['data']['shipping_cost'] ?? '') === '30.00'
+        && ($couponOrder['data']['total_amount'] ?? '') === '210.00',
+    'order with coupon stores snapshots + authoritative totals'
+);
+check($stockOf($couponVariantId, $csrfSearchH) === 18, 'coupon order decrements stock (20 - 2 = 18)');
+
+[$status, , $body] = httpRequest('POST', '/api/orders', array_merge($orderPayload, [
+    'email' => 'bad-coupon@example.com',
+    'coupon_code' => 'NOPE',
+    'items' => [['variant_id' => $couponVariantId, 'quantity' => 1]],
+]), $csrfSearchH);
+check($status === 422 && isset($body['errors']['coupon_code']), 'order with unknown coupon -> 422');
+check($stockOf($couponVariantId, $csrfSearchH) === 18, 'rejected coupon order leaves stock untouched');
+[$status, , $body] = httpRequest('POST', '/api/orders', array_merge($orderPayload, [
+    'email' => 'inactive-coupon@example.com',
+    'coupon_code' => 'INACTIVE20',
+    'items' => [['variant_id' => $couponVariantId, 'quantity' => 1]],
+]), $csrfSearchH);
+check($status === 422 && isset($body['errors']['coupon_code']), 'order with inactive coupon -> 422');
+[$status, , $body] = httpRequest('POST', '/api/orders', array_merge($orderPayload, [
+    'email' => 'expired-coupon@example.com',
+    'coupon_code' => 'EXPIRED10',
+    'items' => [['variant_id' => $couponVariantId, 'quantity' => 1]],
+]), $csrfSearchH);
+check($status === 422 && isset($body['errors']['coupon_code']), 'order with expired coupon -> 422');
+check($stockOf($couponVariantId, $csrfSearchH) === 18, 'rejected inactive/expired coupon orders leave stock untouched');
+
+// Admin CRUD: list, update, duplicate-code guard, delete.
+[$status, , $couponList] = httpRequest('GET', '/api/admin/coupons', null, $adminToken);
+$couponCodes = array_column($couponList['data'] ?? [], 'code');
+check(
+    $status === 200 && in_array('SAVE10', $couponCodes, true)
+        && in_array('EXPIRED10', $couponCodes, true) && in_array('INACTIVE20', $couponCodes, true),
+    'admin coupon list includes active, expired and inactive coupons'
+);
+[$status, , $updatedCoupon] = httpRequest('PUT', "/api/admin/coupons/{$pctCouponId}", [
+    'is_active' => false,
+], $adminToken + $csrfSearchH);
+check($status === 200 && ($updatedCoupon['data']['is_active'] ?? 1) === 0, 'admin can deactivate a coupon');
+[$status, , $body] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'SAVE10', 'items' => $couponItems,
+], $csrfSearchH);
+check($status === 422 && isset($body['errors']['coupon_code']), 'deactivated coupon stops working immediately');
+
+[$status, , $updatedCoupon] = httpRequest('PUT', "/api/admin/coupons/{$pctCouponId}", [
+    'code' => 'SAVE-10', 'is_active' => true,
+], $adminToken + $csrfSearchH);
+check(
+    $status === 200 && ($updatedCoupon['data']['code'] ?? '') === 'SAVE-10'
+        && ($updatedCoupon['data']['is_active'] ?? 0) === 1,
+    'admin can rename + reactivate a coupon'
+);
+[$status, , $body] = httpRequest('PUT', "/api/admin/coupons/{$pctCouponId}", [
+    'code' => 'FIXED25',
+], $adminToken + $csrfSearchH);
+check($status === 409 && isset($body['errors']['code']), 'coupon update to a taken code -> 409');
+[$status, , $body] = httpRequest('PUT', "/api/admin/coupons/{$pctCouponId}", [
+    'discount_value' => '0',
+], $adminToken + $csrfSearchH);
+check($status === 422 && isset($body['errors']['discount_value']), 'coupon update to an invalid value -> 422');
+[$status, , ] = httpRequest('PUT', '/api/admin/coupons/999999', ['is_active' => false], $adminToken + $csrfSearchH);
+check($status === 404, 'admin update of a missing coupon -> 404');
+
+// Deleting a coupon must preserve the order's snapshots (FK SET NULL).
+[$status] = httpRequest('DELETE', "/api/admin/coupons/{$pctCouponId}", null, $adminToken + $csrfSearchH);
+check($status === 204, 'admin can delete a coupon');
+[$status, , $snapshotOrder] = httpRequest('GET', "/api/orders/{$couponOrderId}?token=" . urlencode($couponOrderToken));
+check(
+    $status === 200
+        && array_key_exists('coupon_id', $snapshotOrder['data'] ?? [])
+        && $snapshotOrder['data']['coupon_id'] === null
+        && ($snapshotOrder['data']['coupon_code'] ?? '') === 'SAVE10'
+        && ($snapshotOrder['data']['discount_amount'] ?? '') === '20.00'
+        && ($snapshotOrder['data']['total_amount'] ?? '') === '210.00',
+    'deleting a coupon keeps the order code/discount/total snapshot'
+);
+[$status, , $adminSnapshot] = httpRequest('GET', "/api/admin/orders/{$couponOrderId}", null, $adminToken);
+check(
+    $status === 200 && array_key_exists('coupon_id', $adminSnapshot['data'] ?? [])
+        && $adminSnapshot['data']['coupon_id'] === null
+        && ($adminSnapshot['data']['coupon_code'] ?? '') === 'SAVE10'
+        && ($adminSnapshot['data']['discount_amount'] ?? '') === '20.00',
+    'admin order detail keeps the coupon snapshot after deletion'
+);
+[$status] = httpRequest('DELETE', '/api/admin/coupons/999999', null, $adminToken + $csrfSearchH);
+check($status === 404, 'admin delete of a missing coupon -> 404');
+[$status] = httpRequest('GET', '/api/admin/coupons');
+check($status === 401, 'admin coupon list without a session -> 401');
+[$status] = httpRequest('POST', '/api/admin/coupons', [
+    'code' => 'NOCSRF', 'discount_type' => 'fixed', 'discount_value' => '1',
+], $adminToken);
+check($status === 403, 'admin coupon create without CSRF -> 403');
+
+// Reset shipping for the remaining suites.
+[$status] = httpRequest('PUT', '/api/admin/settings', [
+    'shipping_cost' => '0.00', 'free_shipping_threshold' => '0',
+], $adminToken + $csrfSearchH);
+check($status === 200, 'coupon suite resets shipping to 0');
+
+// --- Coupon preview rate limit ---------------------------------------------
+// Start from an empty bucket so the normal coupon previews above cannot make
+// this assertion order-dependent. 20 allowed attempts + the first rejection.
+foreach (glob($rateLimitDir . '/*.json') ?: [] as $f) {
+    @unlink($f);
+}
+$allowedCouponPreviews = 0;
+for ($i = 0; $i < 20; $i++) {
+    [$status] = httpRequest('POST', '/api/coupons/validate', [
+        'code' => 'RATE-LIMIT-NOPE', 'items' => $couponItems,
+    ], $csrfSearchH);
+    if ($status === 422) {
+        $allowedCouponPreviews++;
+    }
+}
+check($allowedCouponPreviews === 20, 'coupon preview allows 20 requests inside the rate window');
+[$status, $rateHeaders, $rateBody] = httpRequest('POST', '/api/coupons/validate', [
+    'code' => 'RATE-LIMIT-NOPE', 'items' => $couponItems,
+], $csrfSearchH);
+check(
+    $status === 429
+        && isset($rateHeaders['retry-after']) && (int) $rateHeaders['retry-after'] > 0
+        && ($rateBody['error'] ?? '') === 'Too many requests. Please try again later.'
+        && (int) ($rateBody['retry_after'] ?? 0) > 0
+        && !isset($rateBody['errors']),
+    'coupon preview request 21 -> 429 with Retry-After and no field details'
+);
+
+// --- Contact honeypot ------------------------------------------------------
+// The contact bucket is isolated per run; clear it so this suite tests the
+// honeypot, not the 3-per-10-minute request budget.
+foreach (glob($rateLimitDir . '/*.json') ?: [] as $f) {
+    @unlink($f);
+}
+[, , $csrfContact] = httpRequest('GET', '/api/csrf-token');
+$csrfContactH = ['X-CSRF-Token' => $csrfContact['csrf_token'] ?? ''];
+$contactBefore = (int) $pdo->query('SELECT COUNT(*) FROM contact_messages')->fetchColumn();
+[$status, , $honeypot] = httpRequest('POST', '/api/contact', [
+    'name' => 'Bot Sender',
+    'email' => 'bot@example.com',
+    'message' => 'This message should never reach the database.',
+    'website' => 'https://spam.example',
+], $csrfContactH);
+$contactAfterHoneypot = (int) $pdo->query('SELECT COUNT(*) FROM contact_messages')->fetchColumn();
+check(
+    $status === 422 && isset($honeypot['errors']['message']),
+    'contact honeypot submission -> 422 generic validation error'
+);
+check($contactAfterHoneypot === $contactBefore, 'contact honeypot never stores a message');
+[$status, , $validContact] = httpRequest('POST', '/api/contact', [
+    'name' => 'Real Sender',
+    'email' => 'real-sender@example.com',
+    'message' => 'I would like to ask about the linen collection.',
+], $csrfContactH);
+$contactAfterValid = (int) $pdo->query('SELECT COUNT(*) FROM contact_messages')->fetchColumn();
+check($status === 201 && (int) ($validContact['data']['id'] ?? 0) > 0, 'valid contact submission -> 201');
+check($contactAfterValid === $contactBefore + 1, 'valid contact submission stores exactly one message');
+
+// --- Admin account management ---------------------------------------------
+[, , $csrfAccount] = httpRequest('GET', '/api/csrf-token');
+$csrfAccountH = ['X-CSRF-Token' => $csrfAccount['csrf_token'] ?? ''];
+[$status, , $accounts] = httpRequest('GET', '/api/admin/accounts', null, $adminToken);
+$mainAdmin = null;
+foreach (($accounts['data'] ?? []) as $row) {
+    if (($row['email'] ?? '') === 'admin@example.com') {
+        $mainAdmin = $row;
+    }
+}
+$mainAdminId = (int) ($mainAdmin['id'] ?? 0);
+check($status === 200 && $mainAdminId > 0, 'admin account list returns the seeded admin');
+$accountLeak = false;
+foreach (($accounts['data'] ?? []) as $row) {
+    if (array_key_exists('password_hash', $row) || array_key_exists('password', $row)) {
+        $accountLeak = true;
+    }
+}
+check(!$accountLeak, 'admin account list never exposes password hashes');
+[$status, , $meAdmin] = httpRequest('GET', '/api/admin/auth/me', null, $adminToken);
+check($status === 200 && (int) ($meAdmin['data']['id'] ?? 0) === $mainAdminId, 'admin auth me identifies the current account');
+
+[$status, , $body] = httpRequest('POST', '/api/admin/accounts', [
+    'name' => 'Short Pass', 'email' => 'short@example.com', 'password' => 'short',
+], $adminToken + $csrfAccountH);
+check($status === 422 && isset($body['errors']['password']), 'admin account create with short password -> 422');
+[$status, , $body] = httpRequest('POST', '/api/admin/accounts', [
+    'name' => 'Bad Email', 'email' => 'not-an-email', 'password' => 'ValidPass123!',
+], $adminToken + $csrfAccountH);
+check($status === 422 && isset($body['errors']['email']), 'admin account create with invalid email -> 422');
+[$status, , $body] = httpRequest('POST', '/api/admin/accounts', [
+    'name' => 'Duplicate', 'email' => 'ADMIN@EXAMPLE.COM', 'password' => 'ValidPass123!',
+], $adminToken + $csrfAccountH);
+check($status === 409 && isset($body['errors']['email']), 'admin account create with duplicate email -> 409');
+[$status, , ] = httpRequest('POST', '/api/admin/accounts', [
+    'name' => 'No CSRF', 'email' => 'nocsrf@example.com', 'password' => 'ValidPass123!',
+], $adminToken);
+check($status === 403, 'admin account create without CSRF -> 403');
+
+[$status, , $createdAdmin] = httpRequest('POST', '/api/admin/accounts', [
+    'name' => 'Second Admin',
+    'email' => ' Second.Admin@Example.com ',
+    'password' => 'SecondPass123!',
+], $adminToken + $csrfAccountH);
+$secondAdminId = (int) ($createdAdmin['data']['id'] ?? 0);
+check(
+    $status === 201 && $secondAdminId > 0
+        && ($createdAdmin['data']['email'] ?? '') === 'second.admin@example.com',
+    'admin account create normalizes the email (no hash in response)'
+);
+check(!array_key_exists('password_hash', $createdAdmin['data'] ?? []), 'created admin response excludes the password hash');
+
+// Establish a real session before the password change so invalidation can be
+// proven for BOTH the access JWT and the refresh-token row.
+[$status, , $secondLoginBefore] = httpRequest('POST', '/api/admin/auth/login', [
+    'email' => 'second.admin@example.com', 'password' => 'SecondPass123!',
+]);
+$secondOldToken = ['Authorization' => 'Bearer ' . ($secondLoginBefore['token'] ?? '')];
+$secondOldRefreshHash = hash('sha256', (string) ($secondLoginBefore['refresh_token'] ?? ''));
+check(
+    $status === 200 && is_string($secondLoginBefore['token'] ?? null)
+        && is_string($secondLoginBefore['refresh_token'] ?? null),
+    'second admin can log in before the password change'
+);
+[$status] = httpRequest('GET', '/api/admin/accounts', null, $secondOldToken);
+check($status === 200, 'pre-change admin access token works');
+$activeBeforeStmt = $pdo->prepare(
+    'SELECT COUNT(*) FROM admin_refresh_tokens
+      WHERE admin_id = ? AND token_hash = ? AND revoked_at IS NULL'
+);
+$activeBeforeStmt->execute([$secondAdminId, $secondOldRefreshHash]);
+check((int) $activeBeforeStmt->fetchColumn() === 1, 'pre-change admin refresh session is active');
+
+[$status, , $body] = httpRequest('PUT', "/api/admin/accounts/{$secondAdminId}", [
+    'email' => 'admin@example.com',
+], $adminToken + $csrfAccountH);
+check($status === 409 && isset($body['errors']['email']), 'admin account update to a taken email -> 409');
+[$status, , $updatedAdmin] = httpRequest('PUT', "/api/admin/accounts/{$secondAdminId}", [
+    'name' => 'Renamed Admin',
+    'password' => 'NewSecondPass123!',
+], $adminToken + $csrfAccountH);
+check($status === 200 && ($updatedAdmin['data']['name'] ?? '') === 'Renamed Admin', 'admin account update changes name + password');
+
+[$status, , $endedSession] = httpRequest('GET', '/api/admin/auth/me', null, $secondOldToken);
+check(
+    $status === 401 && str_contains($endedSession['error'] ?? '', 'session'),
+    'password change invalidates the old access token immediately'
+);
+$activeAfterStmt = $pdo->prepare(
+    'SELECT COUNT(*) FROM admin_refresh_tokens
+      WHERE admin_id = ? AND token_hash = ? AND revoked_at IS NULL'
+);
+$activeAfterStmt->execute([$secondAdminId, $secondOldRefreshHash]);
+check((int) $activeAfterStmt->fetchColumn() === 0, 'password change revokes the old refresh token');
+
+[$status, , $oldLogin] = httpRequest('POST', '/api/admin/auth/login', [
+    'email' => 'second.admin@example.com', 'password' => 'SecondPass123!',
+]);
+check($status === 401, 'admin password update invalidates the old password');
+[$status, , $secondLogin] = httpRequest('POST', '/api/admin/auth/login', [
+    'email' => 'second.admin@example.com', 'password' => 'NewSecondPass123!',
+]);
+$secondToken = ['Authorization' => 'Bearer ' . ($secondLogin['token'] ?? '')];
+check($status === 200 && is_string($secondLogin['token'] ?? null), 'new admin password logs in successfully');
+[$status, , $secondAccounts] = httpRequest('GET', '/api/admin/accounts', null, $secondToken);
+check($status === 200 && count($secondAccounts['data'] ?? []) === 2, 'new admin can access admin account management');
+
+[$status, , $selfDelete] = httpRequest('DELETE', "/api/admin/accounts/{$secondAdminId}", null, $secondToken + $csrfAccountH);
+check($status === 409 && str_contains($selfDelete['error'] ?? '', 'your own'), 'admin cannot delete their own account -> 409');
+[$status, , $seededSelfDelete] = httpRequest('DELETE', "/api/admin/accounts/{$mainAdminId}", null, $adminToken + $csrfAccountH);
+check(
+    $status === 409 && str_contains($seededSelfDelete['error'] ?? '', 'your own'),
+    'seeded admin cannot delete their own account -> 409'
+);
+
+[$status] = httpRequest('DELETE', "/api/admin/accounts/{$secondAdminId}", null, $adminToken + $csrfAccountH);
+check($status === 204, 'another admin can delete the new account');
+[$status, , ] = httpRequest('GET', '/api/admin/auth/me', null, $secondToken);
+check($status === 401, 'deleted admin access token is rejected immediately');
+
+// --- Last-admin guard under concurrent cross-deletion ----------------------
+// Isolated scratch schema; two child processes each run the REAL repository
+// method and try to delete the other admin. Exactly one deletion may win and
+// the other must hit the last-admin guard. This exercises the For UPDATE lock
+// without touching the main test DB's admins.
+$scratchGuardName = $dbName . '_last_admin_guard';
+$scratchAdmins = $mkScratchDb('last_admin_guard');
+$scratchAdmins->exec(
+    'CREATE TABLE admins (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        email VARCHAR(150) NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        role VARCHAR(30) NOT NULL DEFAULT \'admin\',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_admins_email (email)
+    ) ENGINE=InnoDB'
+);
+$scratchAdmins->exec(
+    "INSERT INTO admins (name, email, password_hash) VALUES
+        ('Guard A', 'guard-a@example.com', 'x'),
+        ('Guard B', 'guard-b@example.com', 'x')"
+);
+$guardScript = sys_get_temp_dir() . '/lb-last-admin-guard-' . getmypid() . '-' . bin2hex(random_bytes(3)) . '.php';
+file_put_contents($guardScript, <<<'PHP'
+<?php
+
+declare(strict_types=1);
+
+require $argv[1] . '/api/src/autoload.php';
+App\Core\Env::load($argv[2]);
+
+$pdo = App\Core\Database::get();
+$ref = new ReflectionClass(App\Repositories\AdminRepository::class);
+$repo = $ref->newInstanceWithoutConstructor();
+$dbProperty = new ReflectionProperty(App\Repositories\Repository::class, 'db');
+$dbProperty->setValue($repo, $pdo);
+
+try {
+    $repo->deleteGuarded((int) $argv[3], (int) $argv[4]);
+    echo 'deleted';
+} catch (App\Core\ConflictException $e) {
+    echo 'guard:' . $e->getMessage();
+} catch (Throwable $e) {
+    fwrite(STDERR, get_class($e) . ': ' . $e->getMessage());
+    exit(1);
+}
+PHP);
+$scratchEnv = tempnam(sys_get_temp_dir(), 'lb-last-admin-env-');
+file_put_contents(
+    (string) $scratchEnv,
+    str_replace("DB_NAME={$dbName}", "DB_NAME={$scratchGuardName}", (string) file_get_contents((string) $envFile))
+);
+@chmod((string) $scratchEnv, 0600);
+
+$spawnDelete = static function (int $target, int $actor) use ($guardScript, $scratchEnv, $repoRoot): array {
+    $proc = proc_open(
+        [PHP_BINARY, '-d', 'display_errors=stderr', $guardScript, $repoRoot, (string) $scratchEnv, (string) $target, (string) $actor],
+        [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+        $pipes,
+        $repoRoot
+    );
+    if (!is_resource($proc)) {
+        return [1, '', 'proc_open failed'];
+    }
+    return [$proc, $pipes];
+};
+$guardProcessA = $spawnDelete(2, 1);
+$guardProcessB = $spawnDelete(1, 2);
+
+$collectDelete = static function (array $spawned): array {
+    [$proc, $pipes] = $spawned;
+    if (!is_resource($proc)) {
+        return [1, '', 'proc_open failed'];
+    }
+    $out = (string) stream_get_contents($pipes[1]);
+    $err = (string) stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    return [proc_close($proc), trim($out), trim($err)];
+};
+[$guardCodeA, $guardOutA, $guardErrA] = $collectDelete($guardProcessA);
+[$guardCodeB, $guardOutB, $guardErrB] = $collectDelete($guardProcessB);
+$guardA = str_starts_with($guardOutA, 'guard:');
+$guardB = str_starts_with($guardOutB, 'guard:');
+$remainingAdmins = (int) $scratchAdmins->query('SELECT COUNT(*) FROM admins')->fetchColumn();
+check(
+    $guardCodeA === 0 && $guardCodeB === 0 && $guardErrA === '' && $guardErrB === '',
+    'both concurrent admin deletions complete without infrastructure errors'
+);
+check(
+    ($guardOutA === 'deleted') !== ($guardOutB === 'deleted'),
+    'concurrent cross-deletion lets exactly one admin deletion succeed'
+);
+check(
+    ($guardA && str_contains($guardOutA, 'last admin')) || ($guardB && str_contains($guardOutB, 'last admin')),
+    'the losing concurrent deletion is rejected by the last-admin guard'
+);
+check($remainingAdmins === 1, 'concurrent admin deletions leave exactly one admin account');
+
+$scratchAdmins = null;
+$adminPdo->exec("DROP DATABASE IF EXISTS `{$scratchGuardName}`");
+@unlink((string) $guardScript);
+@unlink((string) $scratchEnv);
+
+[$status, , ] = httpRequest('PUT', '/api/admin/accounts/999999', ['name' => 'Ghost'], $adminToken + $csrfAccountH);
+check($status === 404, 'admin account update of a missing account -> 404');
+[$status] = httpRequest('GET', '/api/admin/accounts');
+check($status === 401, 'admin account list without a session -> 401');
+
+// --- Automated backup script (isolated test DB + temp directory) -----------
+$backupDir = sys_get_temp_dir() . '/lb-backup-test-' . getmypid() . '-' . bin2hex(random_bytes(3));
+mkdir($backupDir, 0777, true);
+$manualBackup = $backupDir . '/lucebianca_pre_014_015_20260920_002441.sql';
+file_put_contents($manualBackup, "manual backup fixture - must survive retention\n");
+touch($manualBackup, time() - 10 * 86400);
+$oldGenerated = $backupDir . '/lucebianca_20000101_000000.sql.gz';
+file_put_contents($oldGenerated, gzencode('old generated backup'));
+touch($oldGenerated, time() - 10 * 86400);
+
+$runBackup = static function (array $overrides) use ($envFile, $repoRoot): array {
+    $command = [PHP_BINARY, $repoRoot . '/api/scripts/backup-db.php'];
+    $env = array_merge(getenv() ?: [], ['LB_TEST_ENV_FILE' => $envFile], $overrides);
+    $proc = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $repoRoot, $env);
+    if (!is_resource($proc)) {
+        return [1, '', 'proc_open failed'];
+    }
+    $out = stream_get_contents($pipes[1]);
+    $err = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    return [proc_close($proc), (string) $out, (string) $err];
+};
+
+[$backupCode, $backupOut, $backupErr] = $runBackup([
+    'DB_BACKUP_DIR' => $backupDir,
+    'DB_BACKUP_RETENTION_DAYS' => '1',
+]);
+$generatedBackups = array_values(array_filter(
+    glob($backupDir . '/lucebianca_*.sql.gz') ?: [],
+    static fn (string $f): bool => preg_match('/^lucebianca_[0-9]{8}_[0-9]{6}\.sql\.gz$/', basename($f)) === 1
+));
+$newBackup = $generatedBackups[0] ?? '';
+check(
+    $backupCode === 0 && $newBackup !== '' && str_contains($backupOut, 'Backup created:')
+        && str_contains($backupOut, 'Pruned 1 backup'),
+    'backup script creates a dump and prunes the old generated dump'
+);
+check(is_file($manualBackup) && file_get_contents($manualBackup) === "manual backup fixture - must survive retention\n", 'backup retention never touches manual backups');
+check(!is_file($oldGenerated), 'backup retention removes generated dumps older than the retention window');
+check(glob($backupDir . '/*.tmp') === [], 'backup script leaves no .tmp file behind');
+if ($newBackup !== '') {
+    $magic = (string) file_get_contents($newBackup, false, null, 0, 2);
+    check($magic === "\x1f\x8b", 'backup output is gzip-compressed');
+    $gzip = gzopen($newBackup, 'rb');
+    $dumpHead = $gzip !== false ? (string) gzread($gzip, 1024 * 1024) : '';
+    if ($gzip !== false) {
+        gzclose($gzip);
+    }
+    check(str_contains($dumpHead, 'CREATE TABLE `orders`'), 'backup contains the orders table schema');
+} else {
+    check(false, 'backup output is gzip-compressed');
+    check(false, 'backup contains the orders table schema');
+}
+if ($dbPass !== '') {
+    check(!str_contains($backupOut . $backupErr, (string) $dbPass), 'backup output never prints the database password');
+}
+check(!str_contains($backupOut . $backupErr, 'DB_PASS='), 'backup output never prints credential assignments');
+
+[$failCode, $failOut, $failErr] = $runBackup([
+    'DB_BACKUP_DIR' => $backupDir,
+    'MYSQLDUMP_BIN' => 'definitely-not-a-real-mysqldump-' . bin2hex(random_bytes(4)),
+]);
+$afterFailedRun = array_values(array_filter(
+    glob($backupDir . '/lucebianca_*.sql.gz') ?: [],
+    static fn (string $f): bool => preg_match('/^lucebianca_[0-9]{8}_[0-9]{6}\.sql\.gz$/', basename($f)) === 1
+));
+check($failCode !== 0 && str_contains($failErr, 'Backup failed'), 'backup script exits non-zero when mysqldump is unavailable');
+check(count($afterFailedRun) === count($generatedBackups), 'failed backup leaves no plausible-looking dump');
+check(glob($backupDir . '/*.tmp') === [], 'failed backup leaves no .tmp file');
+if ($dbPass !== '') {
+    check(!str_contains($failOut . $failErr, (string) $dbPass), 'failed backup output never prints the database password');
+}
+
+// Cleanup the isolated backup fixture directory only.
+foreach (glob($backupDir . '/*') ?: [] as $f) {
+    @unlink($f);
+}
+@unlink($backupDir . '/.backup-db.lock');
+@rmdir($backupDir);
 
 // --- Error-response safety ------------------------------------------------
 [, , $nf] = httpRequest('GET', '/api/nonexistent-route');

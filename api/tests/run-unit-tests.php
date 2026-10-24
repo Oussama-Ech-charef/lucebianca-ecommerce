@@ -243,6 +243,12 @@ $jwt = Auth::issue(42, 'user', 3600);
 $claims = Auth::verify($jwt);
 check(($claims['sub'] ?? 0) === 42 && ($claims['role'] ?? '') === 'user', 'Auth: issue/verify roundtrip');
 
+$adminJwt = Auth::issue(7, 'admin', 3600, 1234);
+$adminClaims = Auth::verify($adminJwt);
+check(($adminClaims['sid'] ?? 0) === 1234, 'Auth: optional admin session id is embedded in the JWT');
+$unboundAdminClaims = Auth::verify(Auth::issue(7, 'admin', 3600));
+check(!array_key_exists('sid', $unboundAdminClaims), 'Auth: tokens without a session id omit the sid claim');
+
 [$h, $p, $sig] = explode('.', $jwt);
 check(throws(fn () => Auth::verify("{$h}.{$p}." . str_repeat('A', strlen($sig)))), 'Auth: tampered signature rejected');
 check(throws(fn () => Auth::verify('not-a-jwt')), 'Auth: malformed token rejected');
