@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
+import CookieBanner from "@/components/cookie-banner";
 import Footer from "@/components/footer";
 import Header from "@/components/header";
 import WhatsAppButton from "@/components/whatsapp-button";
@@ -30,6 +31,7 @@ export default function StorefrontShell({ children }: { children: ReactNode }) {
       <div className="flex flex-1 flex-col">{children}</div>
       <Footer />
       <WhatsAppButton />
+      <CookieBanner />
     </CartProvider>
   );
 }
