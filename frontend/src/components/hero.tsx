@@ -3,7 +3,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import { motion, useReducedMotion, useScroll, useTransform } from "framer-motion";
-import { useRef } from "react";
+import { useRef, useState } from "react";
+
+// Optional hero background video. No approved video asset ships with the
+// repository today, so these stay empty and the existing CSS/logo media layer
+// is used unchanged. Configure both URLs on the host to enable the video.
+const HERO_VIDEO_URL = (process.env.NEXT_PUBLIC_HERO_VIDEO_URL ?? "").trim();
+const HERO_VIDEO_POSTER = (process.env.NEXT_PUBLIC_HERO_VIDEO_POSTER ?? "").trim();
 
 /**
  * Hero — spec 3.6. Background media layers inside <HeroMedia />: dark base,
@@ -91,9 +97,46 @@ export default function Hero() {
 }
 
 function HeroMedia() {
+  const prefersReducedMotion = useReducedMotion();
+  const [videoFailed, setVideoFailed] = useState(false);
+  const showVideo =
+    HERO_VIDEO_URL !== "" && !videoFailed && prefersReducedMotion !== true;
+  const showPoster = !showVideo && HERO_VIDEO_POSTER !== "";
+
   return (
     <div className="absolute inset-0">
       <div className="absolute inset-0 bg-neutral-950" />
+
+      {showVideo ? (
+        <video
+          className="absolute inset-0 h-full w-full object-cover"
+          src={HERO_VIDEO_URL}
+          poster={HERO_VIDEO_POSTER !== "" ? HERO_VIDEO_POSTER : undefined}
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="metadata"
+          aria-hidden="true"
+          tabIndex={-1}
+          disablePictureInPicture
+          onError={() => setVideoFailed(true)}
+        />
+      ) : showPoster ? (
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 bg-cover bg-center"
+          style={{ backgroundImage: `url("${HERO_VIDEO_POSTER}")` }}
+        />
+      ) : null}
+
+      {showVideo || showPoster ? (
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 bg-gradient-to-r from-neutral-950/85 via-neutral-950/55 to-neutral-950/25"
+        />
+      ) : null}
+
       <span className="absolute left-6 top-14 hidden h-28 w-px bg-white/15 sm:block" />
       <span className="absolute right-6 top-14 hidden h-28 w-px bg-white/15 sm:block" />
       <span className="absolute bottom-16 left-6 hidden w-28 h-px bg-white/15 sm:block" />
