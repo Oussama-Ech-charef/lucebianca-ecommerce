@@ -27,15 +27,15 @@ is the source of truth going forward.**
   on a database that already holds tables but no history (override with
   `--force` after a backup).
 
-`../schema.sql` is the **snapshot for FRESH installs only** (now 19 tables, incl. `015` lookup_token + `016`–`020` columns). See `docs/decisions/2026-09-21-order-payment-privacy.md` for order/payment privacy and `docs/decisions/2026-09-19-schema-drift-audit.md` for earlier drift.
+`../schema.sql` is the **snapshot for FRESH installs only** (now 19 tables, incl. `015` lookup_token + `016`–`021` columns/FK). See `docs/decisions/2026-09-21-order-payment-privacy.md` for order/payment privacy and `docs/decisions/2026-09-19-schema-drift-audit.md` for earlier drift.
 
 ## Two supported paths
 
-1. **Fresh install:** `mysql -u root -p < database/schema.sql` **only**. Do not replay `001`→`020` on an empty DB.
+1. **Fresh install:** `mysql -u root -p < database/schema.sql` **only**. Do not replay `001`→`021` on an empty DB.
 2. **Upgrade existing DB:** after a backup, run `php api/scripts/migrate.php --dry-run` to review, then `php api/scripts/migrate.php` to apply pending files in order (tracked). Example: `mysql -u root -p lucebianca < database/migrations/015_add_orders_lookup_token.sql`.
 3. **Adopt a manually-migrated DB** (has tables, no `schema_migrations` rows): after verifying the schema already contains the effects, run `php api/scripts/migrate.php --baseline` to record history without executing. Never `--baseline` a database that is missing migrations — the missing schema will surface later as obscure runtime errors.
 
-**Why replaying `001`→`020` on an empty DB is NOT supported:** `010_add_newsletter_status_columns.sql:10` does `ALTER TABLE newsletter_subscribers ADD COLUMN is_active` without a guard — after `008` already created the table *with* `is_active`, `010` fails with `Duplicate column` by design (it documents the historical fix; the runner fails loudly there instead of silently skipping, so fresh installs must use the snapshot). `013_add_city_postal_to_orders.sql:14` uses `ADD COLUMN IF NOT EXISTS` (MySQL 8.0.23+ only) which is not portable to MariaDB 10.4 (the project's spec DB) — `014` uses `INFORMATION_SCHEMA`+`PREPARE` for both. The snapshot avoids both issues. `015` backfills `lookup_token` for existing rows and is safe to re-run.
+**Why replaying `001`→`021` on an empty DB is NOT supported:** `010_add_newsletter_status_columns.sql:10` does `ALTER TABLE newsletter_subscribers ADD COLUMN is_active` without a guard — after `008` already created the table *with* `is_active`, `010` fails with `Duplicate column` by design (it documents the historical fix; the runner fails loudly there instead of silently skipping, so fresh installs must use the snapshot). `013_add_city_postal_to_orders.sql:14` uses `ADD COLUMN IF NOT EXISTS` (MySQL 8.0.23+ only) which is not portable to MariaDB 10.4 (the project's spec DB) — `014` uses `INFORMATION_SCHEMA`+`PREPARE` for both. The snapshot avoids both issues. `015` backfills `lookup_token` for existing rows and is safe to re-run.
 
 ## How to apply (upgrade)
 
@@ -44,7 +44,7 @@ From the project root, in order, only the files your DB has not yet applied:
 ```bash
 mysqldump -u root -p lucebianca > backup_$(date +%F).sql
 php api/scripts/migrate.php --dry-run   # review pending (read-only, touches nothing)
-php api/scripts/migrate.php             # apply 014→020 once each, tracked
+php api/scripts/migrate.php             # apply 014→021 once each, tracked
 # Adopt a manually-migrated DB instead of executing (see path 3 above):
 php api/scripts/migrate.php --baseline
 # Legacy manual alternative (same order, one file at a time):
@@ -70,9 +70,14 @@ SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() A
 SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' ORDER BY ORDINAL_POSITION;
 -- Expect google_id, email_verified, email_verification_token, email_verification_expires_at
 
--- Orders columns (009/013/015)
+-- Orders columns (009/013/015/016/020/021)
 SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' ORDER BY ORDINAL_POSITION;
--- Expect email VARCHAR(255) NULL, lookup_token VARCHAR(64) NOT NULL UNIQUE, city VARCHAR(100) NOT NULL DEFAULT '', postal_code VARCHAR(20) NOT NULL DEFAULT ''
+-- Expect email VARCHAR(255) NULL, lookup_token VARCHAR(64) NOT NULL UNIQUE, city VARCHAR(100) NOT NULL DEFAULT '', postal_code VARCHAR(20) NOT NULL DEFAULT '',
+-- subtotal_amount/shipping_cost, inventory_released_at, coupon_id INT UNSIGNED NULL, coupon_code VARCHAR(40) NULL, discount_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00
+
+-- Coupon link object (021): index + ON DELETE SET NULL FK
+SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND INDEX_NAME = 'idx_orders_coupon';
+SELECT CONSTRAINT_NAME, DELETE_RULE, UPDATE_RULE FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND CONSTRAINT_NAME = 'fk_orders_coupon';
 
 -- Newsletter lifecycle (008/010)
 SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'newsletter_subscribers' ORDER BY ORDINAL_POSITION;
@@ -87,7 +92,7 @@ SELECT INDEX_NAME, COLUMN_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SC
 SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'products' AND COLUMN_NAME = 'sale_price';
 ```
 
-Compare output to `001`→`015` definitions. If unknown, treat as **unknown**.
+Compare output to `001`→`021` definitions. If unknown, treat as **unknown**.
 
 ## Current catalog
 
@@ -107,9 +112,17 @@ Compare output to `001`→`015` definitions. If unknown, treat as **unknown**.
 | `012_add_product_sizes_colors_tables.sql` | product_sizes / product_colors catalog tables | applied |
 | `013_add_city_postal_to_orders.sql` | orders.city VARCHAR(100) NOT NULL DEFAULT '' + postal_code VARCHAR(20) NOT NULL DEFAULT '' — uses ADD COLUMN IF NOT EXISTS (MySQL 8.0.23+ only) | applied — not portable to MariaDB, 014 provides portable guard |
 | `014_schema_drift_repairs.sql` | Drift repairs for 006/007/008/010/013 portability + snapshot alignment; INFORMATION_SCHEMA+PREPARE, re-runnable, **UNTESTED** (no DB execution) | applied — after backup |
-| `015_add_orders_lookup_token.sql` | orders.lookup_token VARCHAR(64) NOT NULL UNIQUE — non-guessable guest lookup token (64 hex, 256-bit), backfilled via UUID, INFORMATION_SCHEMA guarded, **UNTESTED** | new — apply after backup; enables safe guest privacy |
-| `016_add_orders_shipping_breakdown.sql` | orders.subtotal_amount + shipping_cost (authoritative totals, backfilled subtotal=total) — INFORMATION_SCHEMA guarded, re-runnable | new — apply after backup |
-| `017_add_password_reset_to_users.sql` | users.password_reset_hash (SHA-256) + password_reset_expires_at (1 h, single-use) + index | new — apply after backup |
-| `018_add_newsletter_unsubscribe_audit.sql` | newsletter_subscribers.unsubscribe_count audit (tokens are stateless HMAC, no PII stored) | new — apply after backup |
-| `019_create_schema_migrations.sql` | schema_migrations tracking table (filename + checksum, append-only) + `api/scripts/migrate.php` runner | new — runner creates if missing |
-| `020_add_orders_inventory_released.sql` | orders.inventory_released_at DATETIME NULL (durable idempotent-release marker; additive, re-runnable) | new — apply after backup |
+| `015_add_orders_lookup_token.sql` | orders.lookup_token VARCHAR(64) NOT NULL UNIQUE — non-guessable guest lookup token (64 hex, 256-bit), backfilled via UUID, INFORMATION_SCHEMA guarded, **UNTESTED** | applied — current dev DB; verify/apply after backup elsewhere |
+| `016_add_orders_shipping_breakdown.sql` | orders.subtotal_amount + shipping_cost (authoritative totals, backfilled subtotal=total) — INFORMATION_SCHEMA guarded, re-runnable | applied — current dev DB; verify/apply after backup elsewhere |
+| `017_add_password_reset_to_users.sql` | users.password_reset_hash (SHA-256) + password_reset_expires_at (1 h, single-use) + index | applied — current dev DB; verify/apply after backup elsewhere |
+| `018_add_newsletter_unsubscribe_audit.sql` | newsletter_subscribers.unsubscribe_count audit (tokens are stateless HMAC, no PII stored) | applied — current dev DB; verify/apply after backup elsewhere |
+| `019_create_schema_migrations.sql` | schema_migrations tracking table (filename + checksum, append-only) + `api/scripts/migrate.php` runner | applied — runner creates if missing |
+| `020_add_orders_inventory_released.sql` | orders.inventory_released_at DATETIME NULL (durable idempotent-release marker; additive, re-runnable) | applied — current dev DB; verify/apply after backup elsewhere |
+| `021_add_orders_coupon_fields.sql` | orders.coupon_id (nullable FK, ON DELETE SET NULL) + coupon_code snapshot + discount_amount; index `idx_orders_coupon`; INFORMATION_SCHEMA guarded, additive, re-runnable | applied — current dev DB (columns/index/FK verified 2026-10-19); verify/apply after backup elsewhere |
+
+Status in this catalog is environment-specific. It was verified read-only on
+2026-10-19 for the current development database: `schema_migrations` records
+`001`–`021`, and `orders` has the three `021` columns, `idx_orders_coupon`, and
+`fk_orders_coupon` with `ON DELETE SET NULL`. Always verify each deployment
+database independently with the checklist above before deploying code that
+expects newer columns.

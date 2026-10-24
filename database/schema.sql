@@ -2,8 +2,8 @@
 -- Luce Bianca — Database Schema
 -- Engine: InnoDB | Charset: utf8mb4 (full Arabic support)
 -- Source: lucebianca-project-full.md, section 4
--- Snapshot for FRESH installs only (now 18 tables, +015 lookup_token).
--- Do not replay migrations 001-015 on an empty DB.
+-- Snapshot for FRESH installs only (now 19 tables, incl. 015 lookup_token + 016–021 columns/FK).
+-- Do not replay migrations 001-021 on an empty DB.
 -- See database/migrations/README.md for the two supported paths.
 -- ============================================================
 
@@ -129,6 +129,9 @@ CREATE TABLE orders (
   total_amount     DECIMAL(10,2) NOT NULL,   -- 016: subtotal + shipping (authoritative, server-computed)
   subtotal_amount  DECIMAL(10,2) NOT NULL DEFAULT 0.00, -- 016: lines total before shipping
   shipping_cost    DECIMAL(10,2) NOT NULL DEFAULT 0.00, -- 016: authoritative shipping charged
+  coupon_id        INT UNSIGNED  NULL,                -- 021: coupon used (SET NULL on delete; snapshot below survives)
+  coupon_code      VARCHAR(40)   NULL,                -- 021: immutable code snapshot at order time
+  discount_amount  DECIMAL(10,2) NOT NULL DEFAULT 0.00, -- 021: authoritative coupon discount (capped at subtotal)
   shipping_address VARCHAR(255)  NOT NULL,
   city             VARCHAR(100)  NOT NULL DEFAULT '', -- 013: separate city, default '' for existing rows
   postal_code      VARCHAR(20)   NOT NULL DEFAULT '', -- 013: postal code, default '' for existing rows
@@ -142,6 +145,7 @@ CREATE TABLE orders (
   created_at       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_orders_user (user_id),
   KEY idx_orders_status (status),           -- index: fast filtering in the admin panel
+  KEY idx_orders_coupon (coupon_id),        -- 021: coupon reporting / FK support
   UNIQUE KEY uq_orders_lookup_token (lookup_token),
   CONSTRAINT fk_orders_user FOREIGN KEY (user_id)
     REFERENCES users(id) ON DELETE SET NULL
@@ -182,6 +186,13 @@ CREATE TABLE coupons (
   is_active      TINYINT(1)    NOT NULL DEFAULT 1,
   UNIQUE KEY uq_coupons_code (code)
 ) ENGINE=InnoDB;
+
+-- 021: orders.coupon_id is declared before this table (fresh-install ordering),
+-- so the FK is added here once coupons exists. ON DELETE SET NULL preserves the
+-- order's coupon_code + discount_amount snapshots when a coupon is deleted.
+ALTER TABLE orders
+  ADD CONSTRAINT fk_orders_coupon FOREIGN KEY (coupon_id)
+  REFERENCES coupons(id) ON DELETE SET NULL;
 
 -- ------------------------------------------------------------
 -- 10) contact_messages: messages from the /contact form
