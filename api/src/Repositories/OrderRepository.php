@@ -27,6 +27,7 @@ final class OrderRepository extends Repository
      *
      * @param array{
      *   total_amount: string, subtotal_amount?: string, shipping_cost?: string,
+     *   coupon_id?: int|null, coupon_code?: string|null, discount_amount?: string,
      *   shipping_address: string, city: string, postal_code: string,
      *   customer_name: string, phone: string, email: string, payment_method: string
      * } $data Order columns.
@@ -52,14 +53,25 @@ final class OrderRepository extends Repository
 
         $stmt = $this->db->prepare(
             'INSERT INTO orders
-               (user_id, status, total_amount, subtotal_amount, shipping_cost, shipping_address, city, postal_code, customer_name, phone, email, lookup_token, payment_method, payment_status)
+               (user_id, status, total_amount, subtotal_amount, shipping_cost, coupon_id, coupon_code, discount_amount, shipping_address, city, postal_code, customer_name, phone, email, lookup_token, payment_method, payment_status)
              VALUES
-               (:user_id, \'pending\', :total_amount, :subtotal_amount, :shipping_cost, :shipping_address, :city, :postal_code, :customer_name, :phone, :email, :lookup_token, :payment_method, \'pending\')'
+               (:user_id, \'pending\', :total_amount, :subtotal_amount, :shipping_cost, :coupon_id, :coupon_code, :discount_amount, :shipping_address, :city, :postal_code, :customer_name, :phone, :email, :lookup_token, :payment_method, \'pending\')'
         );
         $stmt->bindValue(':user_id', $userId, \PDO::PARAM_INT);
         $stmt->bindValue(':total_amount', $data['total_amount']);
         $stmt->bindValue(':subtotal_amount', $data['subtotal_amount'] ?? $data['total_amount']);
         $stmt->bindValue(':shipping_cost', $data['shipping_cost'] ?? '0.00');
+        $stmt->bindValue(
+            ':coupon_id',
+            $data['coupon_id'] ?? null,
+            isset($data['coupon_id']) ? \PDO::PARAM_INT : \PDO::PARAM_NULL
+        );
+        $stmt->bindValue(
+            ':coupon_code',
+            $data['coupon_code'] ?? null,
+            isset($data['coupon_code']) ? \PDO::PARAM_STR : \PDO::PARAM_NULL
+        );
+        $stmt->bindValue(':discount_amount', $data['discount_amount'] ?? '0.00');
         $stmt->bindValue(':shipping_address', $data['shipping_address']);
         $stmt->bindValue(':city', $data['city'] ?? '');
         $stmt->bindValue(':postal_code', $data['postal_code'] ?? '');
@@ -207,7 +219,8 @@ final class OrderRepository extends Repository
 
         $offset = ($page - 1) * $perPage;
         $stmt   = $this->db->prepare(
-            "SELECT o.id, o.customer_name, o.phone, o.total_amount, o.subtotal_amount, o.shipping_cost, o.status,
+            "SELECT o.id, o.customer_name, o.phone, o.total_amount, o.subtotal_amount, o.shipping_cost,
+                    o.coupon_code, o.discount_amount, o.status,
                     o.payment_method, o.payment_status, o.created_at,
                     (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS item_count
                FROM orders o
@@ -249,7 +262,8 @@ final class OrderRepository extends Repository
 
         $offset = ($page - 1) * $perPage;
         $stmt   = $this->db->prepare(
-            'SELECT o.id, o.customer_name, o.phone, o.total_amount, o.subtotal_amount, o.shipping_cost, o.status,
+            'SELECT o.id, o.customer_name, o.phone, o.total_amount, o.subtotal_amount, o.shipping_cost,
+                    o.coupon_code, o.discount_amount, o.status,
                     o.payment_method, o.payment_status, o.created_at,
                     (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS item_count
                FROM orders o

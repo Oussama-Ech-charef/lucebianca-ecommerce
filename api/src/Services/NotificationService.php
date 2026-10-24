@@ -67,12 +67,19 @@ final class NotificationService
         $customerName = $orderData['customer_name'] ?? 'Unknown';
         $totalAmount = $orderData['total_amount'] ?? '0.00';
         $paymentMethod = $orderData['payment_method'] ?? '';
+        $couponCode = (string) ($orderData['coupon_code'] ?? '');
+        $discountAmount = (float) ($orderData['discount_amount'] ?? 0);
+        $discountLine = $discountAmount > 0
+            ? 'Discount' . ($couponCode !== '' ? " ($couponCode)" : '') . ': -'
+                . number_format($discountAmount, 2, '.', '') . " MAD\n"
+            : '';
 
         $subject = "New Order #$orderId - Luce Bianca";
         $message = "A new order has been placed:\n\n"
             . "Order ID: #$orderId\n"
             . "Customer: $customerName\n"
             . "Total: $totalAmount MAD\n"
+            . $discountLine
             . "Payment Method: " . $this->formatPaymentMethod($paymentMethod) . "\n\n"
             . "View order details in the admin panel.";
 

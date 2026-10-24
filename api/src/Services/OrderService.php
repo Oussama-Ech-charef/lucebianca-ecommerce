@@ -7,9 +7,10 @@ use App\Core\Database;
 use App\Core\ErrorLogger;
 use App\Core\ValidationException;
 use App\Core\Validator;
+use App\Models\Coupon;
 use App\Models\Order;
+use App\Repositories\CouponRepository;
 use App\Repositories\OrderRepository;
-use PDOException;
 
 /**
  * OrderService — cart validation + order placement business logic.
@@ -26,6 +27,7 @@ use PDOException;
 final class OrderService
 {
     private OrderRepository $orders;
+    private CouponRepository $coupons;
     private EmailService $email;
     private NotificationService $notifications;
     private \App\Repositories\SettingsRepository $settings;
@@ -33,6 +35,7 @@ final class OrderService
     public function __construct()
     {
         $this->orders = new OrderRepository();
+        $this->coupons = new CouponRepository();
         $this->email = new EmailService();
         $this->notifications = new NotificationService();
         $this->settings = new \App\Repositories\SettingsRepository();
@@ -113,6 +116,69 @@ final class OrderService
     }
 
     /**
+     * Authoritative cart quote for checkout / coupon preview (no persistence).
+     *
+     * Resolves every line against live data exactly like placeOrder(): the
+     * client's prices are ignored, stock is checked, and the merchandise
+     * subtotal is computed server-side. When a coupon code is supplied it must
+     * be active and unexpired; the discount is capped at the subtotal and
+     * shipping is calculated on the PRE-discount subtotal.
+     *
+     * @param array<int, mixed> $lines      Raw {variant_id, quantity} lines.
+     * @param string|null       $couponCode Optional coupon code.
+     *
+     * @return array{subtotal_amount: string, discount_amount: string,
+     *               shipping_cost: string, total_amount: string,
+     *               coupon: array<string, mixed>|null}
+     *
+     * @throws ValidationException When lines or the coupon are invalid.
+     * @throws ConflictException   When a line is unavailable or short on stock.
+     */
+    public function quoteCart(array $lines, ?string $couponCode = null): array
+    {
+        $normalized = $this->normalizeLines($lines);
+        $rows       = $this->orders->variantsWithProducts(
+            array_map(static fn (array $line): int => $line['variant_id'], $normalized)
+        );
+
+        $subtotalCents = 0;
+        foreach ($normalized as $line) {
+            $row = $rows[$line['variant_id']] ?? null;
+
+            if ($row === null) {
+                throw new ConflictException('A cart item is no longer available. Please review your cart.');
+            }
+            if ((int) $row['is_active'] !== 1) {
+                throw new ConflictException("{$row['product_name']} is no longer available. Please review your cart.");
+            }
+            if ((int) $row['stock_quantity'] < $line['quantity']) {
+                throw new ConflictException(
+                    "Not enough stock for {$row['product_name']} (size {$row['size']}, {$row['color']}). "
+                    . 'Please adjust the quantity.'
+                );
+            }
+
+            $unitPrice = $this->effectiveUnitPrice($row);
+            $subtotalCents += (int) round(((float) $unitPrice) * 100) * $line['quantity'];
+        }
+
+        $coupon = null;
+        $discountCents = 0;
+        $code = $this->normalizeCouponCode($couponCode);
+        if ($code !== null) {
+            $coupon = $this->coupons->findValidByCode($code);
+            if ($coupon === null) {
+                throw new ValidationException([
+                    'coupon_code' => 'This coupon is invalid or has expired.',
+                ]);
+            }
+            $discountCents = CouponService::calculateDiscountCents($coupon, $subtotalCents);
+        }
+
+        return $this->totalsPayload($subtotalCents, $discountCents, $coupon);
+    }
+
+    /**
      * Places an order in a single transaction.
      *
      * 1. Validates customer fields + payment method (only 'cod', 'whatsapp', 'card'
@@ -134,6 +200,11 @@ final class OrderService
      *                                         (null = guest checkout) so a
      *                                         logged-in order shows up on the
      *                                         customer's /account page.
+     * @param string|null     $couponCode      Optional coupon code. Revalidated
+     *                                         and locked inside the transaction;
+     *                                         an invalid/expired code rejects the
+     *                                         order instead of silently dropping
+     *                                         the discount.
      *
      * @return Order The created order with its line items.
      *
@@ -149,7 +220,8 @@ final class OrderService
         string $postalCode,
         string $paymentMethod,
         array $lines,
-        ?int $userId = null
+        ?int $userId = null,
+        ?string $couponCode = null
     ): Order {
         // --- Customer fields ---
         $errors = Validator::validate(
@@ -225,24 +297,43 @@ final class OrderService
             ];
         }
 
-        // Authoritative shipping (settings-driven, never client-supplied).
-        $shippingCents = $this->calculateShippingCents($subtotalCents);
-        $totalCents = $subtotalCents + $shippingCents;
-        $subtotalAmount = number_format($subtotalCents / 100, 2, '.', '');
-        $shippingCost = number_format($shippingCents / 100, 2, '.', '');
-        $totalAmount = number_format($totalCents / 100, 2, '.', '');
+        // Shipping is settings-driven and never client-supplied. The
+        // free-shipping threshold is evaluated on the PRE-discount
+        // merchandise subtotal, so a coupon never changes the shipping tier.
+        $couponCode = $this->normalizeCouponCode($couponCode);
 
-        // --- One transaction: order + items + guarded stock decrement. ---
+        // --- One transaction: coupon lock + order + items + stock decrement. ---
         // Generate single-purpose lookup token for guest privacy (non-guessable, returned once).
         $lookupToken = \App\Repositories\OrderRepository::generateLookupToken();
         $pdo = Database::get();
         $lowStockAlerts = [];
         $pdo->beginTransaction();
         try {
+            // Coupon is re-read under a row lock inside the transaction: an
+            // admin edit/deactivation that committed since the checkout
+            // preview cannot slip a stale discount into the order.
+            $coupon = null;
+            $discountCents = 0;
+            if ($couponCode !== null) {
+                $coupon = $this->coupons->findValidByCodeForUpdate($couponCode);
+                if ($coupon === null) {
+                    $pdo->rollBack();
+                    throw new ValidationException([
+                        'coupon_code' => 'This coupon is invalid or has expired.',
+                    ]);
+                }
+                $discountCents = CouponService::calculateDiscountCents($coupon, $subtotalCents);
+            }
+
+            $totals = $this->totalsPayload($subtotalCents, $discountCents, $coupon);
+
             $orderId = $this->orders->insertOrder([
-                'total_amount'     => $totalAmount,
-                'subtotal_amount'  => $subtotalAmount,
-                'shipping_cost'    => $shippingCost,
+                'total_amount'     => $totals['total_amount'],
+                'subtotal_amount'  => $totals['subtotal_amount'],
+                'shipping_cost'    => $totals['shipping_cost'],
+                'coupon_id'        => $coupon?->id,
+                'coupon_code'      => $coupon?->code,
+                'discount_amount'  => $totals['discount_amount'],
                 'shipping_address' => $shippingAddress,
                 'city'             => $city,
                 'postal_code'      => $postalCode,
@@ -284,7 +375,7 @@ final class OrderService
             }
 
             $pdo->commit();
-        } catch (PDOException $e) {
+        } catch (\Throwable $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
             }
@@ -668,6 +759,43 @@ final class OrderService
             'subtotal' => number_format($subtotalCents / 100, 2, '.', ''),
             'shipping' => number_format($shippingCents / 100, 2, '.', ''),
             'total' => number_format(($subtotalCents + $shippingCents) / 100, 2, '.', ''),
+        ];
+    }
+
+    /**
+     * Normalizes an optional coupon code: trims whitespace and treats an
+     * empty string as "no coupon".
+     */
+    private function normalizeCouponCode(?string $couponCode): ?string
+    {
+        if ($couponCode === null) {
+            return null;
+        }
+        $code = trim($couponCode);
+        return $code === '' ? null : $code;
+    }
+
+    /**
+     * Builds the authoritative money breakdown from a merchandise subtotal
+     * and an already-validated discount. Shipping is always based on the
+     * pre-discount subtotal; the total can never go below shipping.
+     *
+     * @return array{subtotal_amount: string, discount_amount: string,
+     *               shipping_cost: string, total_amount: string,
+     *               coupon: array<string, mixed>|null}
+     */
+    private function totalsPayload(int $subtotalCents, int $discountCents, ?Coupon $coupon): array
+    {
+        $shippingCents = $this->calculateShippingCents($subtotalCents);
+        $discountCents = max(0, min($discountCents, $subtotalCents));
+        $totalCents = max(0, $subtotalCents - $discountCents + $shippingCents);
+
+        return [
+            'subtotal_amount' => number_format($subtotalCents / 100, 2, '.', ''),
+            'discount_amount' => number_format($discountCents / 100, 2, '.', ''),
+            'shipping_cost'   => number_format($shippingCents / 100, 2, '.', ''),
+            'total_amount'    => number_format($totalCents / 100, 2, '.', ''),
+            'coupon'          => $coupon?->toArray(),
         ];
     }
 

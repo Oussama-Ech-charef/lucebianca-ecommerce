@@ -34,7 +34,10 @@ final class Order
         public array $items = [],
         public string $subtotalAmount = '0.00',
         public string $shippingCost = '0.00',
-        public ?string $inventoryReleasedAt = null
+        public ?string $inventoryReleasedAt = null,
+        public ?int $couponId = null,
+        public ?string $couponCode = null,
+        public string $discountAmount = '0.00'
     ) {
     }
 
@@ -61,7 +64,10 @@ final class Order
             [],
             isset($row['subtotal_amount']) ? (string) $row['subtotal_amount'] : (string) $row['total_amount'],
             isset($row['shipping_cost']) ? (string) $row['shipping_cost'] : '0.00',
-            $row['inventory_released_at'] ?? null
+            $row['inventory_released_at'] ?? null,
+            isset($row['coupon_id']) && $row['coupon_id'] !== null ? (int) $row['coupon_id'] : null,
+            isset($row['coupon_code']) && $row['coupon_code'] !== null ? (string) $row['coupon_code'] : null,
+            isset($row['discount_amount']) ? (string) $row['discount_amount'] : '0.00'
         );
     }
 
@@ -81,6 +87,9 @@ final class Order
             'total_amount'     => $this->totalAmount,
             'subtotal_amount'  => $this->subtotalAmount,
             'shipping_cost'    => $this->shippingCost,
+            'coupon_id'        => $this->couponId,
+            'coupon_code'      => $this->couponCode,
+            'discount_amount'  => $this->discountAmount,
             'shipping_address' => $this->shippingAddress,
             'city'             => $this->city,
             'postal_code'      => $this->postalCode,

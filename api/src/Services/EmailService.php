@@ -282,6 +282,10 @@ HTML;
         $subtotal = htmlspecialchars($orderData['subtotal_amount'] ?? $orderData['total_amount'] ?? '0.00', ENT_QUOTES, 'UTF-8');
         $shipping = htmlspecialchars($orderData['shipping_cost'] ?? '0.00', ENT_QUOTES, 'UTF-8');
         $shippingLabel = ((float) ($orderData['shipping_cost'] ?? 0)) > 0 ? $shipping . ' MAD' : 'Free';
+        $discountAmount = (float) ($orderData['discount_amount'] ?? 0);
+        $discount = htmlspecialchars($orderData['discount_amount'] ?? '0.00', ENT_QUOTES, 'UTF-8');
+        $couponCode = htmlspecialchars((string) ($orderData['coupon_code'] ?? ''), ENT_QUOTES, 'UTF-8');
+        $discountLabel = $couponCode !== '' ? "Discount ($couponCode)" : 'Discount';
         $shippingAddress = htmlspecialchars($orderData['shipping_address'] ?? '', ENT_QUOTES, 'UTF-8');
         $paymentMethod = htmlspecialchars($orderData['payment_method'] ?? '', ENT_QUOTES, 'UTF-8');
 
@@ -314,6 +318,11 @@ HTML;
             'card' => 'Credit/Debit Card',
             default => ucfirst($paymentMethod),
         };
+
+        $discountRow = $discountAmount > 0
+            ? '<tr><td colspan="2" style="padding:4px 0 0 0;">' . $discountLabel
+                . '</td><td style="padding:4px 0 0 0;text-align:right;">-' . $discount . ' MAD</td></tr>'
+            : '';
 
         return <<<HTML
 <!doctype html>
@@ -356,6 +365,7 @@ HTML;
                   <td colspan="2" style="padding:8px 0 0 0;">Subtotal</td>
                   <td style="padding:8px 0 0 0;text-align:right;">$subtotal MAD</td>
                 </tr>
+                {$discountRow}
                 <tr>
                   <td colspan="2" style="padding:4px 0 0 0;">Shipping</td>
                   <td style="padding:4px 0 0 0;text-align:right;">$shippingLabel</td>

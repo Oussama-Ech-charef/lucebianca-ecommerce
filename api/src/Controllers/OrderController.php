@@ -58,7 +58,8 @@ final class OrderController extends Controller
                 trim((string) $request->input('postal_code', '')),
                 (string) $request->input('payment_method', ''),
                 is_array($request->input('items')) ? $request->input('items') : [],
-                $this->authenticatedCustomerId($request)
+                $this->authenticatedCustomerId($request),
+                trim((string) $request->input('coupon_code', '')) ?: null
             );
         } catch (ValidationException $e) {
             $this->error($e->getMessage(), 422, ['errors' => $e->errors()]);
