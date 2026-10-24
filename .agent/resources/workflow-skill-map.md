@@ -6,19 +6,19 @@ Use the smallest set of skills that covers the workflow. Load additional skills 
 |---|---|---|
 | Discover | `project-discovery` | `requirements-analysis`, `architecture`, `find-skills` when a capability is missing |
 | Plan | `requirements-analysis`, `project-management` | `architecture`, `documentation`, `grill-me` for broad or risky plans |
-| Build | `architecture` | `frontend`, `backend`, `database`, `patterns`, `tdd`, `codebase-design` |
-| Verify | `quality-assurance` | `security`, `accessibility-internationalization`, `documentation`, `tdd`, `web-design-guidelines`, `agent-browser` |
-| Review | `quality-assurance`, `architecture`, `code-review` | `security`, `frontend`, `backend`, `database`, `devops`, `web-design-guidelines`, `codebase-design` |
-| Feature Delivery | `requirements-analysis`, `architecture`, `quality-assurance` | Domain-specific skills, `grill-me`, `tdd`, `code-review` |
-| Design to Code | `product-design`, `frontend` | `accessibility-internationalization`, `mobile`, `web-design-guidelines`, `agent-browser` |
+| Build | `architecture` | `frontend`, `backend`, `database`, `patterns`, `tdd`, `codebase-design`, `mcp-builder` for explicit MCP work, `tailwindcss-development` when Tailwind is confirmed, `laravel-adapter` when Laravel is confirmed |
+| Verify | `quality-assurance` | `security`, `accessibility-internationalization`, `accessibility-testing`, `documentation`, `tdd`, `web-design-guidelines`, `agent-browser`, `playwright`, `api-contract-testing`, `performance-audit` when relevant |
+| Review | `quality-assurance`, `architecture`, `code-review` | `security`, `privacy-data-governance`, `frontend`, `backend`, `database`, `devops`, `observability`, `web-design-guidelines`, `codebase-design`, `laravel-adapter` when Laravel is confirmed |
+| Feature Delivery | `requirements-analysis`, `architecture`, `quality-assurance` | Domain-specific skills, `api-contract-testing`, `mcp-builder` for explicit MCP work, `privacy-data-governance`, `grill-me`, `tdd`, `code-review` |
+| Design to Code | `product-design`, `frontend` | `accessibility-internationalization`, `mobile`, `web-design-guidelines`, `agent-browser`, `tailwindcss-development` when Tailwind is confirmed |
 | Design Research | `design-research`, `product-design` | `frontend`, `web-design-guidelines`, `accessibility-internationalization`, `mobile`, `agent-browser` |
 | Motion and Interaction | `motion-design`, `product-design`, `frontend` | `accessibility-internationalization`, `web-design-guidelines`, `mobile`, `agent-browser` |
 | AI Feature | `ai-integration` | `security`, `backend`, `database`, `quality-assurance` |
-| Ship | `devops`, `quality-assurance`, `production-readiness` | `security`, `database`, `documentation`, `agent-browser` for smoke tests |
+| Ship | `devops`, `quality-assurance`, `production-readiness` | `security`, `privacy-data-governance`, `observability`, `performance-audit`, `database`, `documentation`, `agent-browser` or `playwright` for approved smoke tests |
 | Debug | `project-discovery`, `quality-assurance`, `diagnosing-bugs` | `backend`, `frontend`, `database`, `api-integration`, `agent-browser` |
-| Security Audit | `security` | `backend`, `frontend`, `database`, `devops`, `ai-integration`, `code-review` |
+| Security Audit | `security` | `privacy-data-governance`, `security-threat-model` only for an explicit threat-model request; `backend`, `frontend`, `database`, `devops`, `ai-integration`, `code-review` |
 | Migration | `database`, `quality-assurance` | `backend`, `devops`, `documentation`, `tdd` |
-| Incident Response | `devops`, `quality-assurance`, `diagnosing-bugs` | `security`, `backend`, `database`, `api-integration`, `code-review` |
+| Incident Response | `devops`, `quality-assurance`, `diagnosing-bugs` | `security`, `observability`, `privacy-data-governance`, `backend`, `database`, `api-integration`, `code-review` |
 
 ## Resource Routing
 
@@ -56,4 +56,14 @@ These skills are selected from the request rather than from a dedicated workflow
 | Create, adapt, or review an Agent skill | `skill-authoring` | `find-skills`, `documentation`, `quality-assurance` |
 | Learn from a correction or preserve a demonstrated lesson | `feedback-loop` | `skill-authoring`, `documentation`, `quality-assurance` |
 | Verify rendered UI, visual states, or responsive behavior | `visual-verification` | `agent-browser`, `web-design-guidelines`, `quality-assurance` |
+| Automate a real browser from the terminal | `playwright` | `agent-browser`, `visual-verification`, `quality-assurance` |
+| Explicit repository threat modeling or abuse-path analysis | `security-threat-model` | `security`, `architecture`, `backend`, `database`, `quality-assurance` |
+| Explicit MCP server or MCP integration work | `mcp-builder` | `api-integration`, `security`, `backend`, `quality-assurance`, `documentation` |
+| Sensitive-data lifecycle, privacy controls, or governance | `privacy-data-governance` | `security`, `database`, `backend`, `documentation` |
+| API producer/consumer contract compatibility | `api-contract-testing` | `api-integration`, `backend`, `quality-assurance`, `security` |
+| Performance measurement or bottleneck analysis | `performance-audit` | `quality-assurance`, `visual-verification`, `backend`, `database` |
+| Runtime accessibility verification | `accessibility-testing` | `accessibility-internationalization`, `visual-verification`, `quality-assurance`, `playwright` |
+| Logs, metrics, traces, health checks, or alerting | `observability` | `devops`, `production-readiness`, `quality-assurance`, `security` |
+| Tailwind layout or component work | `tailwindcss-development` | `frontend`, `accessibility-internationalization`, `mobile`, `visual-verification` |
+| Laravel-specific implementation or review | `laravel-adapter` | `backend`, `database`, `security`, `quality-assurance`, `tdd` |
 | Time-boxed prototype or hackathon delivery | `hackathon` | `project-management`, `frontend`, `backend`, `quality-assurance` |

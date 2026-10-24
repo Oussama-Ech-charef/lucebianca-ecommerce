@@ -21,12 +21,22 @@ Never promote “implemented in source” to “operational”, “working”, �
 
 When testing scope-control behavior, state whether the project was clean/original or already modified. A current-state inspection cannot prove what the Agent would have decided on the original baseline.
 
+## Test and Evidence Discipline
+
+- Test observable behavior and project contracts, not private implementation details or framework behavior.
+- Keep tests independent and deterministic. Control time, randomness, network calls, external services, and mutable test data when they can affect the result.
+- Cover the changed decision and important failure boundaries, including authentication, authorization, validation, empty data, duplicate data, missing resources, and error handling when applicable.
+- For write operations, verify the response or return value, persisted state, and relevant side effects. On failure paths, verify that unintended state changes did not occur.
+- Use the project's existing test framework and conventions. Do not invent a test command, dependency, browser harness, or database reset strategy without discovering it first.
+- If tests are unavailable, report the exact static or manual evidence obtained and the untested behavior instead of treating the absence of tests as a pass.
+
 ## Trace Accuracy
 
 - Include the exact command as executed, without ellipses or placeholders.
 - Label rerun checks as current evidence and unrepeated results as prior evidence.
 - Cite verified Agent file paths and headings instead of guessed rule numbers.
 - Recommend runtime or deployment commands only after discovering the project's server, routing, document root, and environment requirements.
+- Keep current evidence separate from prior reports, and distinguish source presence, static checks, runtime behavior, browser behavior, network behavior, and deployment behavior.
 
 ## Output
 

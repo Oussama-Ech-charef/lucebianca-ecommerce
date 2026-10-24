@@ -14,7 +14,8 @@ description: Build an evidence-based map of an unfamiliar project before plannin
 5. Reconcile file, directory, extension, and area totals before reporting them.
 6. Detect the languages, frameworks, data stores, build tools, and external services.
 7. Trace the requested feature through its UI, API, domain, persistence, and test layers.
-8. Record conventions, unknowns, risks, and exact commands that can verify the work.
+8. Infer the project's actual conventions from repeated evidence before proposing implementation choices.
+9. Record conventions, unknowns, risks, and exact commands that can verify the work.
 
 ## Scope and Evidence Requirements
 
@@ -24,8 +25,18 @@ description: Build an evidence-based map of an unfamiliar project before plannin
 - Separate observed facts from assumptions and recommendations.
 - If a count or claim cannot be verified, mark it unverified and explain why.
 
+## Convention Discovery
+
+Treat the codebase's existing behavior as the source of truth for style and architecture. Before introducing a pattern, inspect representative neighboring files and project-owned tooling.
+
+- Record a convention only when there are at least three consistent examples, no meaningful rival, and the choice is not merely a framework default or formatter-owned behavior.
+- Classify each candidate as `Pattern`, `Conflict`, `Default`, `No signal`, `Tooling-owned`, or `Already recorded`.
+- Report evidence paths and competing patterns for conflicts. Do not silently choose a preferred style while the codebase remains mixed.
+- Record deliberate architectural absences when they affect future work, but do not treat an unused feature as proof of a rule.
+- Load framework-specific skills only after the framework is confirmed from project evidence or explicitly requested by the user.
+
 ## Output
 
-Provide a concise project map, affected areas, confirmed facts, assumptions, risks, and recommended next step.
+Provide a concise project map, affected areas, confirmed facts, inferred conventions with evidence, assumptions, risks, and recommended next step.
 
 Do not assume a dependency is actually used merely because it appears in a manifest.

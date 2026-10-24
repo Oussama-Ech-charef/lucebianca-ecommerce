@@ -1,4 +1,4 @@
-# Marwan Oussama Universal Project Agent
+# Oussama Universal Project Agent
 
 A professional, project-agnostic agent for analyzing, developing, testing, and maintaining any software project.
 
@@ -48,13 +48,27 @@ Additional cross-cutting capabilities include debugging, security auditing, mobi
 
 The Agent also includes extension-oriented skills for skill discovery, TDD, systematic bug diagnosis, two-axis code review, design interrogation, deep-module codebase design, web interface audits, and browser-based verification.
 
-The current package contains 32 skills. Some are local adaptations of useful open-agent practices; they preserve the universal rules of this Agent instead of copying provider-specific commands, issue-tracker assumptions, or external installation behavior.
+The current package contains 42 skills. Some are local adaptations of useful open-agent practices; they preserve the universal rules of this Agent instead of copying provider-specific commands, issue-tracker assumptions, or external installation behavior.
+
+`tailwindcss-development` is stack-aware: it activates only when Tailwind is confirmed, detects the project's version and build method, and does not introduce a framework, runtime, or build step by itself. Laravel-specific practices and cloud-provider deployment instructions remain optional references rather than global Agent behavior.
+
+`laravel-adapter` is an optional Laravel framework adapter. It activates only after Laravel is confirmed from project evidence, preserves local conventions, and does not include Laravel Cloud deployment or automatic dependency changes.
 
 For design work, `design-research` grounds visual decisions in real product references and project evidence. It works with `product-design`, `web-design-guidelines`, `frontend`, and `design-to-code` without turning external inspiration into automatic requirements.
 
 For interface motion, `motion-design` and `motion-and-interaction` cover mechanism selection, accessibility, reduced motion, performance, lifecycle cleanup, and visual verification without imposing GSAP or another library.
 
 For rendered UI validation, `visual-verification` separates source presence, static checks, rendered output, runtime behavior, visual inspection, and unverified claims across projects and environments.
+
+For real-browser automation, `playwright` provides a CLI-first verification workflow that complements `agent-browser` without imposing Playwright or Node.js on the application runtime. It is selected only when browser automation is actually required.
+
+For explicit AppSec threat modeling, `security-threat-model` maps repository evidence to trust boundaries, assets, attacker capabilities, abuse paths, and mitigations. It remains separate from the broader `security` audit skill and does not trigger for ordinary architecture or code-review tasks.
+
+For sensitive-data work, `privacy-data-governance` reviews data lifecycle, minimization, access, retention, redaction, and auditability without inventing legal requirements. `api-contract-testing` focuses on producer/consumer compatibility and observed API behavior, while `performance-audit` requires measured baselines before optimization claims.
+
+For runtime quality, `accessibility-testing` verifies rendered keyboard, focus, semantics, contrast, zoom, and reduced-motion behavior, and `observability` reviews operational signals, diagnostics, alerts, and safe telemetry without assuming a vendor or production activation.
+
+For explicit Model Context Protocol work, `mcp-builder` guides service research, tool/resource design, schemas, permissions, side effects, evaluation, and safe integration without forcing MCP, Node.js, Python, or a provider onto unrelated projects.
 
 For extending the Agent itself, `skill-authoring` provides a quality gate for reusable skills, while `resources/encoding-and-localization.md` protects multilingual content, UTF-8 output, RTL behavior, and locale-sensitive formatting.
 

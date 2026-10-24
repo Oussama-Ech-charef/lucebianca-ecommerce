@@ -41,6 +41,13 @@ Use TDD when the project and task benefit from a test-first loop. Test behavior 
 - Avoid unnecessary mocks, snapshot overuse, timing dependence, and assertions on incidental structure.
 - Keep tests deterministic and independent.
 
+## Evidence Boundary
+
+- Record the exact command and scope for the failing test, passing test, and any static checks.
+- A test that passes immediately may indicate existing behavior or an ineffective test; investigate before calling the red-green cycle complete.
+- Do not claim browser, integration, deployment, or concurrency coverage when the test only exercises a unit or isolated application process.
+- If the project has no practical test seam or test runner, explain the limitation and use the smallest safe verification available instead of forcing a TDD structure.
+
 ## Failure Handling
 
 - If the new test passes immediately, confirm whether the behavior already exists or the test is ineffective.
