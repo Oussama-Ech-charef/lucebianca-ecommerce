@@ -87,12 +87,18 @@ final class AdminAuthService
         $accessTtl  = (int) Env::get('JWT_TTL_SECONDS', 3600);
         $refreshTtl = (int) Env::get('JWT_REFRESH_TTL_SECONDS', 604800);
 
-        $accessToken = Auth::issue($admin->id, 'admin', $accessTtl);
-
         $refreshToken = rtrim(strtr(base64_encode(random_bytes(48)), '+/', '-_'), '=');
         $expiresAt    = date('Y-m-d H:i:s', time() + $refreshTtl);
 
-        $this->refreshTokens->create($admin->id, hash('sha256', $refreshToken), $expiresAt);
+        // The refresh-token row is the server-side session record. Its id is
+        // embedded in the access JWT so password changes (which revoke every
+        // session row) invalidate already-issued access tokens too.
+        $sessionId = $this->refreshTokens->create(
+            $admin->id,
+            hash('sha256', $refreshToken),
+            $expiresAt
+        );
+        $accessToken = Auth::issue($admin->id, 'admin', $accessTtl, $sessionId);
 
         return [
             'token'         => $accessToken,

@@ -20,9 +20,11 @@ use App\Core\RateLimitMiddleware;
 use App\Core\Request;
 use App\Core\Router;
 use App\Controllers\AccountController;
+use App\Controllers\Admin\AccountsController;
 use App\Controllers\Admin\AuthController as AdminAuthController;
 use App\Controllers\Admin\CategoriesController;
 use App\Controllers\Admin\ColorsController as AdminColorsController;
+use App\Controllers\Admin\CouponsController;
 use App\Controllers\Admin\CustomersController;
 use App\Controllers\Admin\DashboardController;
 use App\Controllers\Admin\MessagesController;
@@ -36,6 +38,7 @@ use App\Controllers\CartController;
 use App\Controllers\CategoryController;
 use App\Controllers\ColorController;
 use App\Controllers\ContactController;
+use App\Controllers\CouponController;
 use App\Controllers\CsrfController;
 use App\Controllers\HealthController;
 use App\Controllers\NewsletterController;
@@ -55,6 +58,10 @@ $registerRateLimit = new RateLimitMiddleware('register', 5, 300);
 $contactRateLimit = new RateLimitMiddleware('contact', 3, 600);
 $adminLoginRateLimit = new RateLimitMiddleware('admin_login', 5, 300);
 $passwordResetRateLimit = new RateLimitMiddleware('password_reset', 5, 900);
+// Coupon previews are CSRF-protected but still code-guessable by a scripted
+// client. 20 attempts per 5 minutes leaves room for normal apply/remove
+// retries while bounding code probing and per-request cart/stock work.
+$couponValidationRateLimit = new RateLimitMiddleware('coupon_validate', 20, 300);
 
 // CSRF protection for state-changing operations
 $csrfProtection = new CsrfMiddleware();
@@ -93,6 +100,7 @@ $router->get('/api/newsletter/unsubscribe', [NewsletterController::class, 'verif
 // --- Cart + checkout (CSRF protected for state-changing operations) ---
 $router->post('/api/cart', [CartController::class, 'store'], [$csrfProtection]);
 $router->post('/api/orders', [OrderController::class, 'store'], [$csrfProtection]);
+$router->post('/api/coupons/validate', [CouponController::class, 'validate'], [$csrfProtection, $couponValidationRateLimit]);
 $router->get('/api/orders/{id}', [OrderController::class, 'show']);
 $router->post('/api/orders/{id}/cancel', [OrderController::class, 'cancel'], [$csrfProtection]);
 
@@ -128,8 +136,9 @@ $router->post('/api/contact', [ContactController::class, 'store'], [$contactRate
 $adminMiddleware = [new AuthMiddleware('admin')];
 
 // Admin login is PUBLIC (no middleware) — the one exception above.
-// There is no public admin registration; admins are seeded offline via
-// api/scripts/create-admin.php.
+// There is no public admin registration: the first account is seeded offline
+// via api/scripts/create-admin.php, and additional accounts can only be
+// created by an authenticated admin (POST /api/admin/accounts).
 $router->post('/api/admin/auth/login', [AdminAuthController::class, 'login'], [$adminLoginRateLimit]);
 $router->get('/api/admin/auth/me', [AdminAuthController::class, 'me'], $adminMiddleware);
 
@@ -184,5 +193,17 @@ $router->delete('/api/admin/messages/{id}', [MessagesController::class, 'destroy
 // Settings
 $router->get('/api/admin/settings', [SettingsController::class, 'index'], $adminMiddleware);
 $router->put('/api/admin/settings', [SettingsController::class, 'update'], $adminCsrf);
+
+// Coupons (schema-only fields: code, type, value, expiry, active flag)
+$router->get('/api/admin/coupons', [CouponsController::class, 'index'], $adminMiddleware);
+$router->post('/api/admin/coupons', [CouponsController::class, 'store'], $adminCsrf);
+$router->put('/api/admin/coupons/{id}', [CouponsController::class, 'update'], $adminCsrf);
+$router->delete('/api/admin/coupons/{id}', [CouponsController::class, 'destroy'], $adminCsrf);
+
+// Admin accounts (name/email/password only; self-delete + last-admin guards)
+$router->get('/api/admin/accounts', [AccountsController::class, 'index'], $adminMiddleware);
+$router->post('/api/admin/accounts', [AccountsController::class, 'store'], $adminCsrf);
+$router->put('/api/admin/accounts/{id}', [AccountsController::class, 'update'], $adminCsrf);
+$router->delete('/api/admin/accounts/{id}', [AccountsController::class, 'destroy'], $adminCsrf);
 
 $router->dispatch(Request::fromGlobals());

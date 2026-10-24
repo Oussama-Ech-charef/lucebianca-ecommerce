@@ -55,6 +55,48 @@ final class AuthMiddleware implements Middleware
             Response::error('Insufficient permissions.', 403, [], $requestId);
         }
 
+        // Admin access tokens are bound to a live server-side session row.
+        // Password changes revoke every admin_refresh_tokens row for the
+        // account, so this check invalidates already-issued access tokens as
+        // well as refresh tokens. It also covers deleted accounts (the FK
+        // cascade removes their session rows). Tokens issued before this
+        // binding existed have no "sid" claim and are rejected once; admins
+        // simply sign in again to receive a bound token.
+        if ($this->role === 'admin') {
+            $adminId = (int) ($claims['sub'] ?? 0);
+            $rawSid = $claims['sid'] ?? null;
+            $sessionId = is_int($rawSid) || (is_string($rawSid) && ctype_digit($rawSid))
+                ? (int) $rawSid
+                : 0;
+
+            $exists = false;
+            if ($adminId > 0 && $sessionId > 0) {
+                $stmt = Database::get()->prepare(
+                    'SELECT 1
+                       FROM admin_refresh_tokens t
+                       INNER JOIN admins a ON a.id = t.admin_id
+                      WHERE t.id = :sid
+                        AND t.admin_id = :admin_id
+                        AND t.revoked_at IS NULL
+                        AND t.expires_at > NOW()
+                      LIMIT 1'
+                );
+                $stmt->bindValue(':sid', $sessionId, \PDO::PARAM_INT);
+                $stmt->bindValue(':admin_id', $adminId, \PDO::PARAM_INT);
+                $stmt->execute();
+                $exists = $stmt->fetchColumn() !== false;
+                $stmt->closeCursor();
+            }
+
+            if (!$exists) {
+                ErrorLogger::logEvent('warning', 'Authentication failure: admin session is missing, revoked, or expired', $request, [
+                    'admin_id' => $adminId,
+                ]);
+                $requestId = ErrorLogger::currentRequestId($request);
+                Response::error('Your admin session has ended. Please sign in again.', 401, [], $requestId);
+            }
+        }
+
         RequestContext::set('auth', $claims);
     }
 }

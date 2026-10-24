@@ -21,13 +21,17 @@ final class Auth
     /**
      * Issues a signed JWT.
      *
-     * @param int   $userId   Identifier stored in the "sub" claim.
-     * @param string $role    "user" or "admin" (used for admin route protection).
-     * @param int   $ttl      Lifetime in seconds.
+     * @param int      $userId    Identifier stored in the "sub" claim.
+     * @param string   $role      "user" or "admin" (used for admin route protection).
+     * @param int      $ttl       Lifetime in seconds.
+     * @param int|null $sessionId Optional server-side session id stored in
+     *                            the "sid" claim. Admin access tokens use the
+     *                            admin_refresh_tokens row so a revoked session
+     *                            also invalidates the access token.
      *
      * @return string The signed token.
      */
-    public static function issue(int $userId, string $role = 'user', int $ttl = 3600): string
+    public static function issue(int $userId, string $role = 'user', int $ttl = 3600, ?int $sessionId = null): string
     {
         $now = time();
         $payload = [
@@ -36,6 +40,9 @@ final class Auth
             'iat'  => $now,
             'exp'  => $now + $ttl,
         ];
+        if ($sessionId !== null) {
+            $payload['sid'] = $sessionId;
+        }
 
         return self::sign($payload);
     }
