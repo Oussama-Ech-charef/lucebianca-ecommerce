@@ -8,6 +8,7 @@ import {
   clearAdminSession,
   getAdminSession,
 } from "@/lib/admin";
+import AccountsTab from "./accounts-tab";
 
 type Settings = Record<string, string>;
 
@@ -18,7 +19,9 @@ export default function SettingsClient() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-  const [activeTab, setActiveTab] = useState<"store" | "shipping" | "payments" | "notifications">("store");
+  const [activeTab, setActiveTab] = useState<
+    "store" | "shipping" | "payments" | "notifications" | "accounts"
+  >("store");
 
   useEffect(() => {
     async function fetchSettings() {
@@ -174,6 +177,16 @@ export default function SettingsClient() {
           >
             Notifications
           </button>
+          <button
+            onClick={() => setActiveTab("accounts")}
+            className={`shrink-0 whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium ${
+              activeTab === "accounts"
+                ? "border-neutral-900 text-neutral-900"
+                : "border-transparent text-neutral-600 hover:text-neutral-900"
+            }`}
+          >
+            Accounts
+          </button>
         </div>
       </div>
 
@@ -309,6 +322,8 @@ export default function SettingsClient() {
           </>
         )}
 
+        {activeTab === "accounts" && <AccountsTab />}
+
         {activeTab === "notifications" && (
           <>
             <h2 className="text-lg font-medium">Email Notifications</h2>
@@ -373,15 +388,17 @@ export default function SettingsClient() {
           </>
         )}
 
-        <div className="border-t border-neutral-200 pt-6">
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="rounded-lg bg-neutral-900 px-6 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
-          >
-            {saving ? "Saving..." : "Save Settings"}
-          </button>
-        </div>
+        {activeTab !== "accounts" && (
+          <div className="border-t border-neutral-200 pt-6">
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="rounded-lg bg-neutral-900 px-6 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+            >
+              {saving ? "Saving..." : "Save Settings"}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
