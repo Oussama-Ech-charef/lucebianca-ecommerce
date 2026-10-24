@@ -152,21 +152,24 @@ export default async function ConfirmationPage({ searchParams }: PageProps) {
           <div className="flex items-center justify-between">
             <span className="text-neutral-600">Subtotal</span>
             <span className="tabular-nums">
-              {formatPrice(
-                (order as { subtotal_amount?: string }).subtotal_amount ??
-                  order.total_amount,
-              )}
+              {formatPrice(order.subtotal_amount ?? order.total_amount)}
             </span>
           </div>
+          {Number(order.discount_amount ?? 0) > 0 ? (
+            <div className="flex items-center justify-between">
+              <span className="text-neutral-600">
+                Discount{order.coupon_code ? ` (${order.coupon_code})` : ""}
+              </span>
+              <span className="tabular-nums text-green-700">
+                −{formatPrice(order.discount_amount)}
+              </span>
+            </div>
+          ) : null}
           <div className="flex items-center justify-between">
             <span className="text-neutral-600">Shipping</span>
             <span className="tabular-nums">
-              {Number(
-                (order as { shipping_cost?: string }).shipping_cost ?? "0",
-              ) > 0
-                ? formatPrice(
-                    (order as { shipping_cost?: string }).shipping_cost ?? "0",
-                  )
+              {Number(order.shipping_cost ?? "0") > 0
+                ? formatPrice(order.shipping_cost ?? "0")
                 : "Free"}
             </span>
           </div>

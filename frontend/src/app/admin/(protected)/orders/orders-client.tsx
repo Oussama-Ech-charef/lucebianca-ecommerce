@@ -76,11 +76,9 @@ function StatusBadge({ status }: { status: OrderStatus }) {
 }
 
 function OrderItems({ detail }: { detail: OrderDetail }) {
-  const subtotal =
-    (detail as { subtotal_amount?: string }).subtotal_amount ??
-    detail.total_amount;
-  const shipping =
-    (detail as { shipping_cost?: string }).shipping_cost ?? "0.00";
+  const subtotal = detail.subtotal_amount ?? detail.total_amount;
+  const shipping = detail.shipping_cost ?? "0.00";
+  const discount = Number(detail.discount_amount ?? 0);
   return (
     <div className="text-sm">
       <ul className="divide-y divide-neutral-100">
@@ -109,6 +107,16 @@ function OrderItems({ detail }: { detail: OrderDetail }) {
           <dt className="text-neutral-600">Subtotal</dt>
           <dd className="tabular-nums">{formatPrice(subtotal)}</dd>
         </div>
+        {discount > 0 ? (
+          <div className="flex items-center justify-between">
+            <dt className="text-neutral-600">
+              Discount{detail.coupon_code ? ` (${detail.coupon_code})` : ""}
+            </dt>
+            <dd className="tabular-nums text-green-700">
+              −{formatPrice(discount)}
+            </dd>
+          </div>
+        ) : null}
         <div className="flex items-center justify-between">
           <dt className="text-neutral-600">Shipping</dt>
           <dd className="tabular-nums">
