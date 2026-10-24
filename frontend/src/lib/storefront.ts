@@ -10,6 +10,7 @@ import { api, fetchCsrfToken } from "@/lib/api";
 import type {
   CartValidationResponse,
   CategoriesResponse,
+  CouponPreview,
   OrderDetail,
   Paginated,
   ProductDetail,
@@ -19,6 +20,7 @@ import type {
 export type ProductFilters = {
   page?: string;
   per_page?: string;
+  search?: string;
   category?: string;
   size?: string;
   color?: string;
@@ -35,6 +37,7 @@ export function buildProductQuery(filters: ProductFilters): string {
   };
 
   set("page", filters.page);
+  set("search", filters.search?.trim());
   set("category", filters.category);
   set("size", filters.size);
   set("color", filters.color);
@@ -123,6 +126,25 @@ export async function validateCart(
 }
 
 /**
+ * POST /api/coupons/validate — previews a coupon against the cart.
+ *
+ * The server recomputes live prices/stock and returns the authoritative
+ * subtotal, discount, shipping and total. Throws ApiError(422) for an
+ * invalid/expired code and ApiError(409) when a cart line is unavailable.
+ */
+export async function previewCoupon(
+  code: string,
+  items: { variant_id: number; quantity: number }[],
+) {
+  const csrfToken = await fetchCsrfToken();
+  return api<{ data: CouponPreview }>("/api/coupons/validate", {
+    method: "POST",
+    headers: { "X-CSRF-Token": csrfToken },
+    body: { code, items },
+  });
+}
+
+/**
  * POST /api/orders — places an order (COD, WhatsApp or card payment method).
  * Returns 201 with the created order; throws ApiError(409) on a stock
  * conflict and ApiError(422) on invalid input.
@@ -145,6 +167,7 @@ export async function placeOrder(
     postal_code: string;
     payment_method: "cod" | "whatsapp" | "card";
     items: { variant_id: number; quantity: number }[];
+    coupon_code?: string;
   },
   token?: string,
 ) {

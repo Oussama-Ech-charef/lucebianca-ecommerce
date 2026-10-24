@@ -13,11 +13,12 @@ import {
   formatPrice,
   initiateCardPayment,
   placeOrder,
+  previewCoupon,
   validateCart,
   type PaymentConfig,
   type PublicSettings,
 } from "@/lib/storefront";
-import type { OrderDetail } from "@/lib/types";
+import type { CouponPreview, OrderDetail } from "@/lib/types";
 import type { CustomerUser } from "@/lib/types";
 import { buildWhatsAppLink } from "@/lib/whatsapp";
 
@@ -63,8 +64,9 @@ function buildWhatsAppMessage(order: OrderDetail): string {
     )
     .join("\n");
   const addressParts = [order.shipping_address, order.city, order.postal_code].filter(Boolean).join(", ");
-  const subtotal = (order as { subtotal_amount?: string }).subtotal_amount ?? order.total_amount;
-  const shipping = (order as { shipping_cost?: string }).shipping_cost ?? "0.00";
+  const subtotal = order.subtotal_amount ?? order.total_amount;
+  const shipping = order.shipping_cost ?? "0.00";
+  const discount = Number(order.discount_amount ?? 0);
   return [
     `Hello Luce Bianca! I'd like to confirm my order.`,
     ``,
@@ -72,6 +74,9 @@ function buildWhatsAppMessage(order: OrderDetail): string {
     lines,
     ``,
     `Subtotal: ${formatPrice(subtotal)}`,
+    ...(discount > 0
+      ? [`Discount${order.coupon_code ? ` (${order.coupon_code})` : ""}: -${formatPrice(discount)}`]
+      : []),
     `Shipping: ${Number(shipping) > 0 ? formatPrice(shipping) : "Free"}`,
     `Total: ${formatPrice(order.total_amount)}`,
     ``,
@@ -119,6 +124,10 @@ export default function CheckoutForm() {
   const [loadingCustomer, setLoadingCustomer] = useState(true);
   const [publicSettings, setPublicSettings] = useState<PublicSettings | null>(null);
   const [paymentConfig, setPaymentConfig] = useState<PaymentConfig | null>(null);
+  const [couponCode, setCouponCode] = useState("");
+  const [couponPreview, setCouponPreview] = useState<CouponPreview | null>(null);
+  const [couponBusy, setCouponBusy] = useState(false);
+  const [couponError, setCouponError] = useState<string | null>(null);
 
   const redirectingRef = useRef(false);
 
@@ -229,8 +238,18 @@ export default function CheckoutForm() {
   const isCardToggleOn = publicSettings?.payment_card_enabled !== "0";
   const isCardAvailable =
     isCardToggleOn && (paymentConfig?.card_available ?? false);
-  const estimatedShipping = estimateShippingCents(totalPrice, publicSettings);
-  const estimatedTotal = totalPrice + estimatedShipping;
+  const estimatedSubtotal = couponPreview
+    ? Number(couponPreview.subtotal_amount)
+    : totalPrice;
+  const estimatedShipping = couponPreview
+    ? Number(couponPreview.shipping_cost)
+    : estimateShippingCents(totalPrice, publicSettings);
+  const estimatedDiscount = couponPreview
+    ? Number(couponPreview.discount_amount)
+    : 0;
+  const estimatedTotal = couponPreview
+    ? Number(couponPreview.total_amount)
+    : totalPrice + estimatedShipping;
 
   // If the currently selected method becomes disabled via settings, switch to an enabled one
   // (derived selection — disable the cascading-render rule here; the update is
@@ -248,6 +267,46 @@ export default function CheckoutForm() {
       setPaymentMethod(fallback);
     }
   }, [publicSettings, paymentConfig, isCodEnabled, isWhatsappEnabled, isCardAvailable, paymentMethod]);
+
+  async function handleApplyCoupon() {
+    const code = couponCode.trim();
+    if (code === "") {
+      setCouponError("Enter a coupon code.");
+      return;
+    }
+    if (items.length === 0) {
+      return;
+    }
+
+    setCouponBusy(true);
+    setCouponError(null);
+    try {
+      const response = await previewCoupon(
+        code,
+        items.map((item) => ({
+          variant_id: item.variant_id,
+          quantity: item.quantity,
+        })),
+      );
+      setCouponPreview(response.data);
+      setCouponCode(response.data.code);
+    } catch (error) {
+      setCouponPreview(null);
+      setCouponError(
+        error instanceof ApiError
+          ? error.message
+          : "Could not validate this coupon. Please try again.",
+      );
+    } finally {
+      setCouponBusy(false);
+    }
+  }
+
+  function handleRemoveCoupon() {
+    setCouponPreview(null);
+    setCouponCode("");
+    setCouponError(null);
+  }
 
   function validate(): boolean {
     const next: Record<string, string> = {};
@@ -356,6 +415,7 @@ export default function CheckoutForm() {
             variant_id: item.variant_id,
             quantity: item.quantity,
           })),
+          ...(couponPreview ? { coupon_code: couponPreview.code } : {}),
         },
         getCustomerSession()?.token,
       );
@@ -749,11 +809,85 @@ export default function CheckoutForm() {
               </li>
             ))}
           </ul>
+
+          <div className="mt-5 border-t border-neutral-200 pt-4">
+            <label htmlFor="checkout-coupon" className="text-sm font-medium text-neutral-700">
+              Coupon code
+            </label>
+            {couponPreview ? (
+              <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+                <span className="min-w-0">
+                  <span className="font-medium">{couponPreview.code}</span>
+                  <span className="block text-xs text-green-700">
+                    {estimatedDiscount > 0
+                      ? `${formatPrice(estimatedDiscount)} off your order`
+                      : "Applied — no discount on this order"}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={handleRemoveCoupon}
+                  className="shrink-0 text-xs font-medium underline underline-offset-2 hover:text-green-900"
+                >
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <div className="mt-2 flex gap-2">
+                <input
+                  id="checkout-coupon"
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={couponCode}
+                  onChange={(event) => {
+                    setCouponCode(event.target.value);
+                    setCouponError(null);
+                    if (couponPreview) {
+                      setCouponPreview(null);
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void handleApplyCoupon();
+                    }
+                  }}
+                  placeholder="e.g. WELCOME10"
+                  className="block w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-900 uppercase placeholder:normal-case placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleApplyCoupon()}
+                  disabled={couponBusy}
+                  className="shrink-0 rounded-lg border border-neutral-900 px-4 py-2 text-sm font-medium text-neutral-900 transition-colors hover:bg-neutral-900 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {couponBusy ? "Checking…" : "Apply"}
+                </button>
+              </div>
+            )}
+            {couponError ? (
+              <p role="alert" className="mt-2 text-xs text-red-700">
+                {couponError}
+              </p>
+            ) : null}
+          </div>
+
           <dl className="mt-5 space-y-2 border-t border-neutral-200 pt-4 text-sm">
             <div className="flex items-center justify-between">
               <dt className="text-neutral-600">Subtotal</dt>
-              <dd className="tabular-nums">{formatPrice(totalPrice)}</dd>
+              <dd className="tabular-nums">{formatPrice(estimatedSubtotal)}</dd>
             </div>
+            {estimatedDiscount > 0 ? (
+              <div className="flex items-center justify-between">
+                <dt className="text-neutral-600">
+                  Discount{couponPreview ? ` (${couponPreview.code})` : ""}
+                </dt>
+                <dd className="tabular-nums text-green-700">
+                  −{formatPrice(estimatedDiscount)}
+                </dd>
+              </div>
+            ) : null}
             <div className="flex items-center justify-between">
               <dt className="text-neutral-600">Shipping</dt>
               <dd className="tabular-nums">

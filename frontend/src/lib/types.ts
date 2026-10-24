@@ -101,11 +101,34 @@ export type AdminOrder = {
   total_amount: string;
   subtotal_amount?: string;
   shipping_cost?: string;
+  coupon_code?: string | null;
+  discount_amount?: string;
   status: OrderStatus;
   payment_method: string;
   payment_status: PaymentStatus;
   created_at: string;
   item_count: number;
+};
+
+/** A row in GET /api/admin/coupons — mirrors the coupons table exactly. */
+export type Coupon = {
+  id: number;
+  code: string;
+  discount_type: "percentage" | "fixed";
+  discount_value: string;
+  expires_at: string | null;
+  is_active: number;
+};
+
+/** Authoritative cart preview from POST /api/coupons/validate. */
+export type CouponPreview = {
+  code: string;
+  discount_type: "percentage" | "fixed";
+  discount_value: string;
+  subtotal_amount: string;
+  discount_amount: string;
+  shipping_cost: string;
+  total_amount: string;
 };
 
 /** Payload of POST /api/admin/auth/login. */
@@ -181,6 +204,7 @@ export type WishlistItem = {
 export type ProductFilters = {
   page?: string;
   per_page?: string;
+  search?: string;
   category?: string;
   size?: string;
   color?: string;
@@ -216,6 +240,9 @@ export type OrderDetail = {
   total_amount: string;
   subtotal_amount: string;
   shipping_cost: string;
+  coupon_id: number | null;
+  coupon_code: string | null;
+  discount_amount: string;
   shipping_address: string;
   city: string;
   postal_code: string;
