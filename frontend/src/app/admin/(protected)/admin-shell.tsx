@@ -26,6 +26,7 @@ const ADMIN_SECTIONS = [
   { label: "Customers", href: "/admin/customers" },
   { label: "Reviews", href: "/admin/reviews" },
   { label: "Messages", href: "/admin/messages" },
+  { label: "Coupons", href: "/admin/coupons" },
   { label: "Settings", href: "/admin/settings" },
 ];
 
