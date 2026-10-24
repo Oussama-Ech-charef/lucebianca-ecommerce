@@ -41,7 +41,7 @@ final class ProductController extends Controller
     /**
      * GET /api/products — paginated product listing with filtering.
      *
-     * Query params: page, per_page, category, size, color, min_price, max_price.
+     * Query params: page, per_page, search, category, size, color, min_price, max_price.
      * Each item carries its images (empty array when none) for the shop cards.
      */
     public function index(Request $request): never
@@ -49,7 +49,13 @@ final class ProductController extends Controller
         $page    = max(1, (int) $request->query('page', 1));
         $perPage = min(100, max(1, (int) $request->query('per_page', 12)));
 
+        $search = trim((string) $request->query('search', ''));
+        if (mb_strlen($search) > 100) {
+            $search = mb_substr($search, 0, 100);
+        }
+
         $filters = [
+            'search'    => $search,
             'category'  => (string) $request->query('category', ''),
             'size'      => (string) $request->query('size', ''),
             'color'     => (string) $request->query('color', ''),

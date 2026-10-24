@@ -2,12 +2,13 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { useCart } from "@/lib/cart-context";
 import { useCustomerSession } from "@/lib/customer-auth";
-import { formatPrice } from "@/lib/storefront";
+import { fetchProducts, formatPrice } from "@/lib/storefront";
+import type { ShopProduct } from "@/lib/types";
 
 // Storefront routes. /wishlist requires a customer session — signed-out
 // visitors get a sign-in prompt on that page rather than a hidden link.
@@ -22,6 +23,7 @@ type OverlayKey = "mobile" | "search" | "cart";
 
 export default function Header() {
   const pathname = usePathname();
+  const router = useRouter();
   // Overlays remember the route they were opened on: navigating anywhere else
   // (link click, back/forward) implicitly closes them — derived, so no
   // close-on-route-change effect is needed.
@@ -30,6 +32,11 @@ export default function Header() {
     open: Record<OverlayKey, boolean>;
   }>({ path: pathname, open: { mobile: false, search: false, cart: false } });
   const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<ShopProduct[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchRequestRef = useRef(0);
 
   const { items, totalItems, totalPrice, updateQuantity, removeItem } =
     useCart();
@@ -73,6 +80,83 @@ export default function Header() {
       const el = lastTriggerRef.current;
       setTimeout(() => el.focus(), 0);
     }
+  }
+
+  // Cancel a pending debounced search when the header unmounts.
+  useEffect(
+    () => () => {
+      if (searchTimerRef.current !== null) {
+        clearTimeout(searchTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  function resetSearch() {
+    if (searchTimerRef.current !== null) {
+      clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = null;
+    }
+    searchRequestRef.current += 1;
+    setQuery("");
+    setSearchResults([]);
+    setSearchLoading(false);
+    setSearchError(null);
+  }
+
+  function openSearch() {
+    resetSearch();
+    toggleOverlay("search");
+    setOpen("cart", false);
+  }
+
+  function handleSearchChange(value: string) {
+    setQuery(value);
+
+    if (searchTimerRef.current !== null) {
+      clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = null;
+    }
+
+    const term = value.trim();
+    const requestId = ++searchRequestRef.current;
+
+    if (term.length < 2) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      setSearchError(null);
+      return;
+    }
+
+    setSearchLoading(true);
+    setSearchError(null);
+
+    searchTimerRef.current = setTimeout(() => {
+      fetchProducts({ search: term, per_page: "6" })
+        .then((response) => {
+          if (requestId !== searchRequestRef.current) return;
+          setSearchResults(response.data);
+        })
+        .catch(() => {
+          if (requestId !== searchRequestRef.current) return;
+          setSearchResults([]);
+          setSearchError("Search is unavailable right now. Please try again.");
+        })
+        .finally(() => {
+          if (requestId !== searchRequestRef.current) return;
+          setSearchLoading(false);
+        });
+    }, 300);
+  }
+
+  function submitSearch(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const term = query.trim();
+    if (term === "") {
+      return;
+    }
+    closeAll();
+    router.push(`/shop?search=${encodeURIComponent(term)}`);
   }
 
   // Escape closes whichever overlay is open (menu / search / cart drawer)
@@ -178,7 +262,7 @@ export default function Header() {
               type="button"
               aria-label="Search"
               aria-expanded={isOpen("search")}
-              onClick={() => { toggleOverlay("search"); setOpen("cart", false); }}
+              onClick={openSearch}
               className="hidden md:flex h-10 w-10 items-center justify-center rounded-[4px] text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
             >
               <SearchIcon />
@@ -235,29 +319,101 @@ export default function Header() {
         {isOpen("search") ? (
           <div className="border-t border-neutral-200 bg-white">
             <div className="mx-auto max-w-3xl px-4 py-4 sm:px-6">
-              <div className="flex items-center gap-3 border-b-2 border-neutral-900 pb-2">
-                <SearchIcon className="h-5 w-5 text-neutral-400" />
-                <input
-                  autoFocus
-                  type="text"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search Luce Bianca…"
-                  aria-label="Search Luce Bianca"
-                  className="w-full bg-transparent text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1"
-                />
-                <button
-                  type="button"
-                  aria-label="Close search"
-                  onClick={() => setOpen("search", false)}
-                  className="text-neutral-500 transition-colors hover:text-neutral-900"
-                >
-                  <CloseIcon />
-                </button>
+              <form onSubmit={submitSearch} role="search">
+                <div className="flex items-center gap-3 border-b-2 border-neutral-900 pb-2">
+                  <SearchIcon className="h-5 w-5 text-neutral-400" />
+                  <input
+                    autoFocus
+                    type="search"
+                    value={query}
+                    onChange={(event) => handleSearchChange(event.target.value)}
+                    placeholder="Search Luce Bianca…"
+                    aria-label="Search Luce Bianca"
+                    aria-controls="header-search-results"
+                    className="w-full bg-transparent text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-1"
+                  />
+                  <button
+                    type="button"
+                    aria-label="Close search"
+                    onClick={() => setOpen("search", false)}
+                    className="text-neutral-500 transition-colors hover:text-neutral-900"
+                  >
+                    <CloseIcon />
+                  </button>
+                </div>
+              </form>
+
+              <div id="header-search-results" aria-live="polite">
+                {query.trim().length === 0 ? (
+                  <p className="mt-2 text-xs text-neutral-500">
+                    Search by product name, description or category.
+                  </p>
+                ) : query.trim().length < 2 ? (
+                  <p className="mt-2 text-xs text-neutral-500">
+                    Keep typing to see results.
+                  </p>
+                ) : searchLoading ? (
+                  <p className="mt-2 text-xs text-neutral-500">Searching…</p>
+                ) : searchError ? (
+                  <p className="mt-2 text-xs text-red-700">{searchError}</p>
+                ) : searchResults.length === 0 ? (
+                  <p className="mt-2 text-xs text-neutral-500">
+                    No products found for “{query.trim()}”.
+                  </p>
+                ) : (
+                  <>
+                    <ul className="mt-3 divide-y divide-neutral-100">
+                      {searchResults.map((product) => {
+                        const sale = product.sale_price;
+                        const hasSale =
+                          sale !== null &&
+                          Number(sale) > 0 &&
+                          Number(sale) < Number(product.base_price);
+                        const price = hasSale ? sale : product.base_price;
+                        const image = product.images[0]?.image_url;
+                        return (
+                          <li key={product.id}>
+                            <Link
+                              href={`/product/${product.slug}`}
+                              onClick={() => closeAll()}
+                              className="flex items-center gap-3 py-3 transition-colors hover:bg-neutral-50"
+                            >
+                              {image ? (
+                                <Image
+                                  src={image}
+                                  alt=""
+                                  width={48}
+                                  height={48}
+                                  className="h-12 w-12 rounded-md border border-neutral-200 object-cover"
+                                />
+                              ) : (
+                                <span className="flex h-12 w-12 items-center justify-center rounded-md border border-neutral-200 bg-neutral-100 font-serif text-lg text-neutral-300">
+                                  {product.name.charAt(0)}
+                                </span>
+                              )}
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate font-serif text-sm text-neutral-900">
+                                  {product.name}
+                                </span>
+                                <span className="mt-0.5 block text-xs tabular-nums text-neutral-500">
+                                  {formatPrice(price)}
+                                </span>
+                              </span>
+                            </Link>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <Link
+                      href={`/shop?search=${encodeURIComponent(query.trim())}`}
+                      onClick={() => closeAll()}
+                      className="mt-2 inline-block text-xs font-medium text-neutral-900 underline underline-offset-4"
+                    >
+                      View all results
+                    </Link>
+                  </>
+                )}
               </div>
-              <p className="mt-2 text-xs text-neutral-500">
-                Search is coming soon.
-              </p>
             </div>
           </div>
         ) : null}
@@ -312,6 +468,7 @@ export default function Header() {
                 type="button"
                 onClick={() => {
                   setOpen("mobile", false);
+                  resetSearch();
                   setOpen("search", true);
                 }}
                 className="flex items-center gap-3 text-base text-neutral-700"

@@ -42,6 +42,7 @@ export default async function ShopPage({ searchParams }: PageProps<"/shop">) {
   };
 
   const filters: CurrentFilters = {
+    search: str("search"),
     category: str("category"),
     size: str("size"),
     color: str("color"),

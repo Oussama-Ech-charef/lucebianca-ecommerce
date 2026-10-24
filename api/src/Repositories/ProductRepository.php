@@ -18,7 +18,7 @@ final class ProductRepository extends Repository
      *
      * @param int   $page        1-based page number.
      * @param int   $perPage     Items per page (capped by the controller).
-     * @param array $filters     Optional: category, size, color, min_price, max_price.
+     * @param array $filters     Optional: search, category, size, color, min_price, max_price.
      * @param bool  $activeOnly  When true (storefront) only is_active = 1;
      *                           false for the admin panel (active AND paused).
      *
@@ -28,6 +28,23 @@ final class ProductRepository extends Repository
     {
         $where  = $activeOnly ? ['p.is_active = 1'] : [];
         $params = [];
+
+        if (isset($filters['search']) && trim((string) $filters['search']) !== '') {
+            // Literal substring search (case-insensitive under the utf8mb4
+            // collation). ! is the explicit escape character so user-supplied
+            // % / _ behave as text instead of SQL wildcards. Each occurrence
+            // needs its own placeholder: native MySQL prepares reject a
+            // repeated named parameter.
+            $term = trim((string) $filters['search']);
+            $term = str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $term);
+            $where[] = "(p.name LIKE :search_name ESCAPE '!'
+                         OR COALESCE(p.description, '') LIKE :search_description ESCAPE '!'
+                         OR COALESCE(c.name, '') LIKE :search_category ESCAPE '!')";
+            $like = '%' . $term . '%';
+            $params[':search_name']        = $like;
+            $params[':search_description'] = $like;
+            $params[':search_category']    = $like;
+        }
 
         if (!empty($filters['category'])) {
             $where[]            = 'c.slug = :category';

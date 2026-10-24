@@ -6,6 +6,7 @@ import { useState } from "react";
 import type { Category } from "@/lib/types";
 
 export type CurrentFilters = {
+  search?: string;
   category?: string;
   size?: string;
   color?: string;
@@ -25,6 +26,7 @@ export default function FilterPanel({
   current: CurrentFilters;
 }) {
   const router = useRouter();
+  const [search, setSearch] = useState(current.search ?? "");
   const [category, setCategory] = useState(current.category ?? "");
   const [size, setSize] = useState(current.size ?? "");
   const [color, setColor] = useState(current.color ?? "");
@@ -43,10 +45,11 @@ export default function FilterPanel({
   }
 
   function apply() {
-    navigate({ category, size, color, min_price: minPrice, max_price: maxPrice });
+    navigate({ search, category, size, color, min_price: minPrice, max_price: maxPrice });
   }
 
   function clear() {
+    setSearch("");
     setCategory("");
     setSize("");
     setColor("");
@@ -61,6 +64,17 @@ export default function FilterPanel({
 
   return (
     <div className="flex flex-wrap items-end gap-3 rounded-xl border border-neutral-200 bg-white p-4">
+      <label className="block min-w-[14rem] flex-1 text-xs font-medium uppercase tracking-wide text-neutral-500">
+        Search
+        <input
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search the collection"
+          className={labelInput}
+        />
+      </label>
+
       <label className="block text-xs font-medium uppercase tracking-wide text-neutral-500">
         Category
         <select
